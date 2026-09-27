@@ -135,7 +135,7 @@ export default function GoalForm({ open, onOpenChange, onGoalCreated }: GoalForm
                             {...register('title')}
                             className={`w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-green-500 outline-none transition-all ${errors.title ? 'border-red-500 bg-red-50' : 'border-gray-300 dark:border-gray-600 dark:bg-gray-700'
                                 }`}
-                            placeholder="e.g. New Laptop"
+                            placeholder="e.g. Emergency Fund"
                         />
                         {errors.title && (
                             <p className="text-xs text-red-500 mt-1">{errors.title.message}</p>
@@ -153,7 +153,7 @@ export default function GoalForm({ open, onOpenChange, onGoalCreated }: GoalForm
                             {...register('targetAmount')}
                             className={`w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-green-500 outline-none transition-all ${errors.targetAmount ? 'border-red-500 bg-red-50' : 'border-gray-300 dark:border-gray-600 dark:bg-gray-700'
                                 }`}
-                            placeholder="500"
+                            placeholder="e.g. 500"
                         />
                         {errors.targetAmount && (
                             <p className="text-xs text-red-500 mt-1">{errors.targetAmount.message}</p>
