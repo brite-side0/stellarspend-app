@@ -20,6 +20,10 @@ export const metadata: Metadata = {
       "Track spending, manage budgets, and build savings on the Stellar network.",
     type: "website",
   },
+  robots: {
+    index: true,
+    follow: true,
+  },
 };
 
 export default function RootLayout({
