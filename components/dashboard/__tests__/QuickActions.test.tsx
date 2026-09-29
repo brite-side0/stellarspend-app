@@ -9,6 +9,13 @@ jest.mock("../../transactions/SendPaymentModal", () => ({
 }));
 
 describe("QuickActions", () => {
+  it('labels the Send button as "Send payment"', () => {
+    render(<QuickActions />);
+
+    const send = screen.getByRole("button", { name: "Send payment" });
+    expect(send).toHaveAttribute("aria-label", "Send payment");
+  });
+
   it("exposes an accessible name for the New Goal button", () => {
     render(<QuickActions />);
 
