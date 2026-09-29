@@ -81,7 +81,10 @@ export default function CategoryPicker({
       </button>
 
       {isOpen && (
-        <div className="absolute top-full left-0 right-0 mt-2 bg-[#0f1420] border border-white/10 rounded-xl shadow-2xl shadow-black/50 z-50 overflow-hidden">
+        <div
+          role="listbox"
+          className="absolute top-full left-0 right-0 mt-2 bg-[#0f1420] border border-white/10 rounded-xl shadow-2xl shadow-black/50 z-50 overflow-hidden"
+        >
           {!isCustomizing ? (
             <>
               {STANDARD_CATEGORIES.map((category) => {
@@ -122,9 +125,10 @@ export default function CategoryPicker({
               <input
                 autoFocus
                 type="text"
+                aria-label="Search spending categories"
                 value={customValue}
                 onChange={(e) => setCustomValue(e.target.value)}
-                placeholder="e.g. Subscriptions"
+                placeholder="Search categories..."
                 maxLength={40}
                 className="flex-1 px-3 py-2 bg-white/[0.03] border border-white/10 rounded-lg text-sm text-white placeholder-[#7a8aaa]/50 outline-none focus:border-[#e8b84b]/50"
               />

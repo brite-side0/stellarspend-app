@@ -1,46 +1,7 @@
-"use client";
+import type { Metadata } from "next";
+import BudgetsPageClient from "@/components/budgets/BudgetsPageClient";
 
-import { useCallback, useEffect, useState } from "react";
-import {
-  fetchBudgets,
-  createBudget,
-  updateBudget,
-  deleteBudget,
-  fetchSharedBudgets,
-  createSharedBudget,
-  proposeBudgetChange,
-  approveBudgetChange,
-  rejectBudgetChange,
-  fetchPendingChanges,
-  subscribeToSharedBudgets,
-  getConnectedPublicKey,
-  Budget,
-  SharedBudget,
-  PendingBudgetChange,
-} from "@/lib/api/client";
-import BudgetForm, { BudgetFormMode } from "@/components/budgets/BudgetForm";
-import PendingApprovalCard from "@/components/budgets/PendingApprovalCard";
-import BudgetCategoryBreakdownChart from "@/components/budgets/BudgetCategoryBreakdownChart";
-import { useOffline } from "@/components/offline/OfflineProvider";
-import { useToast } from "@/components/ui/use-toast";
-
-interface BudgetFormData {
-  name: string;
-  amount: number;
-  category: string;
-  asset: 'XLM' | 'USDC' | 'EURC';
-  startDate: string;
-  endDate: string;
-  isShared?: boolean;
-  coOwners?: string[];
-  approvalThreshold?: number;
-}
-
-function shortAddress(address: string): string {
-  return address.length > 12
-    ? `${address.slice(0, 6)}…${address.slice(-4)}`
-    : address;
-}
+export const metadata: Metadata = { title: "Budgets | StellarSpend" };
 
 export default function BudgetsPage() {
     const { isOnline, queueAction } = useOffline();
@@ -163,7 +124,15 @@ export default function BudgetsPage() {
         if (!editingBudget) return;
         
         if (!isOnline) {
-            queueAction('UPDATE_BUDGET', `Update budget: ${budgetData.name}`, { id: editingBudget.id, ...budgetData });
+            // Capture the snapshot this edit is based on so replaying the queue
+            // can tell an overlapping edit from another device apart from a
+            // stale value that is safe to apply as-is.
+            queueAction('UPDATE_BUDGET', `Update budget: ${budgetData.name}`, {
+                id: editingBudget.id,
+                changes: { ...budgetData },
+                base: { ...editingBudget },
+                baseVersion: editingBudget.updatedAt,
+            });
             toast({
                 title: "Budget Update Queued",
                 description: "Offline: Your budget updates have been queued and will be saved when you reconnect.",
@@ -582,4 +551,5 @@ export default function BudgetsPage() {
       )}
     </div>
   );
+  return <BudgetsPageClient />;
 }

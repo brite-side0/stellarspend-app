@@ -18,6 +18,7 @@ import { TimeRangeSelector } from '@/components/analytics/timerangeselector';
 import { AnalyticsSection } from '@/components/analytics/analytics';
 import { useAnalytics } from '@/hooks/useAnalytics';
 import { getGranularity, SUPPORTED_ASSETS, TimeRange } from '@/lib/api/stellar/analyticsContract';
+import { exportToCsv } from '@/lib/api/stellar/exportAnalytics';
 import { useState } from 'react';
 
 export default function AnalyticsPage() {
@@ -26,6 +27,19 @@ export default function AnalyticsPage() {
 
   const { trend, categoryBreakdown, budgetVsActual, isLoading, error, refetch } =
     useAnalytics(range);
+
+  const handleExport = () => {
+    const today = new Date().toISOString().split('T')[0];
+    const filename = `stellarspend-analytics-${range}-${today}.csv`;
+    exportToCsv(
+      {
+        trend,
+        categoryBreakdown,
+        budgetVsActual,
+      },
+      filename
+    );
+  };
 
   return (
     <AnalyticsSection>
@@ -37,7 +51,17 @@ export default function AnalyticsPage() {
               Spending trends, category breakdown, and budget performance.
             </p>
           </div>
-          <TimeRangeSelector value={range} onChange={setRange} />
+          <div className="flex items-center gap-3">
+            <TimeRangeSelector value={range} onChange={setRange} />
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={isLoading || (trend.length === 0 && categoryBreakdown.length === 0)}
+              className="inline-flex items-center rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Export CSV
+            </button>
+          </div>
         </div>
 
         {error && (

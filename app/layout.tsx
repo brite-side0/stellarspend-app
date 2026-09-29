@@ -13,16 +13,25 @@ export const metadata: Metadata = {
   title: "StellarSpend — Financial Freedom on the Blockchain",
   description:
     "StellarSpend helps the unbanked and underbanked track spending, manage budgets, and build savings using the low-cost Stellar blockchain. No bank account required.",
-  keywords: ["stellar", "blockchain", "budgeting", "finance", "XLM", "USDC", "unbanked"],
+  keywords: [
+    "stellar",
+    "blockchain",
+    "budgeting",
+    "finance",
+    "XLM",
+    "USDC",
+    "unbanked",
+  ],
   openGraph: {
     title: "StellarSpend — Financial Freedom on the Blockchain",
-    description:
-      "Track spending, manage budgets, and build savings on the Stellar network.",
+    description: "Smart spending for the Stellar ecosystem",
     type: "website",
   },
   robots: {
     index: true,
     follow: true,
+  twitter: {
+    card: "summary_large_image",
   },
 };
 
@@ -37,6 +46,11 @@ export default function RootLayout({
       <body
         className="antialiased font-sans"
       >
+        <noscript>
+          <div className="p-4 bg-amber-500/10 border-b border-amber-500/20 text-amber-200 text-center text-sm">
+            Please enable JavaScript to use StellarSpend.
+          </div>
+        </noscript>
         <I18nProvider initialLanguage="en">
           <NotificationProvider>
             <ClientLayout>
