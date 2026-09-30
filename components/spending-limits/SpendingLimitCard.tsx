@@ -120,7 +120,7 @@ export default function SpendingLimitCard({
               disabled={isDeleting}
               className="p-2 rounded-xl text-[#7a8aaa] hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all active:scale-95 disabled:opacity-50"
               title="Delete spending limit"
-              aria-label={`Delete ${limit.asset} limit`}
+              aria-label="Delete spending limit"
             >
               <Trash2 className="w-4 h-4" />
             </button>
@@ -177,12 +177,23 @@ export default function SpendingLimitCard({
             <span className="text-[#7a8aaa] font-medium uppercase tracking-wider text-[10px]">
               Period Utilization
             </span>
-            <span className={`font-mono font-bold ${getStatusColor()}`}>
+            <span
+              aria-live="polite"
+              aria-atomic="true"
+              className={`font-mono font-bold ${getStatusColor()}`}
+            >
               {percentUsed}% ({formatAmount(limit.spentAmount)} / {formatAmount(limit.limitAmount)} {limit.asset})
             </span>
           </div>
 
-          <div className="w-full h-3 bg-white/5 border border-white/10 rounded-full overflow-hidden p-[2px]">
+          <div
+            role="progressbar"
+            aria-valuenow={percentUsed}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={`${limit.asset} ${limit.period} limit utilization`}
+            className="w-full h-3 bg-white/5 border border-white/10 rounded-full overflow-hidden p-[2px]"
+          >
             <motion.div
               className={`h-full rounded-full bg-gradient-to-r ${getProgressBarGradient()}`}
               initial={{ width: "0%" }}

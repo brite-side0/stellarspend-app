@@ -14,7 +14,7 @@ describe('Button', () => {
     expect(screen.getByTestId('button-spinner')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Saving' })).toBeDisabled();
   });
-});
+
   it('is disabled and has cursor-not-allowed styling when disabled={true}', () => {
     render(<Button disabled>Submit</Button>);
 

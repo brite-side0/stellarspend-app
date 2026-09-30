@@ -34,7 +34,7 @@ export function calculateRoundUpContribution(
   nearestUnit: number,
 ): { roundUpAmount: number; roundedTotal: number } | null {
   const roundUpAmount = calculateRoundUp(transactionAmount, nearestUnit);
-  if (roundUpAmount < 1) return null;
+  if (roundUpAmount <= 0) return null;
   return {
     roundUpAmount,
     roundedTotal: transactionAmount + roundUpAmount,
