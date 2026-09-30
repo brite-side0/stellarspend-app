@@ -99,6 +99,7 @@ export function RoundUpSettings({ goal, onUpdateRule }: RoundUpSettingsProps) {
                     key={unit}
                     variant={selectedUnit === unit ? 'default' : 'outline'}
                     size="sm"
+                    aria-label={`Round up to nearest ${unit} XLM`}
                     onClick={() => setSelectedUnit(unit)}
                   >
                     {unit} XLM
