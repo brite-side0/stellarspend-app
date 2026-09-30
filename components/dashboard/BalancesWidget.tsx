@@ -8,6 +8,11 @@ import {
   type AssetBalance,
   type WalletBalances,
 } from "@/lib/api/client";
+import {
+  startAccountStream,
+  subscribeAccountStream,
+  subscribeAccountStreamStatus,
+} from "@/lib/stellar/accountStream";
 
 // ─── Asset colour map ─────────────────────────────────────────────────────
 
@@ -43,6 +48,7 @@ function AssetCard({ asset, index }: { asset: AssetBalance; index: number }) {
 
   return (
     <motion.div
+      data-testid="balance-card"
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.08, duration: 0.45, ease: "easeOut" }}
@@ -96,7 +102,10 @@ function AssetCard({ asset, index }: { asset: AssetBalance; index: number }) {
 
 function SkeletonCard() {
   return (
-    <div className="flex flex-col gap-4 p-5 rounded-2xl border border-white/10 bg-white/[0.025] animate-pulse">
+    <div
+      data-testid="balance-skeleton"
+      className="flex flex-col gap-4 p-5 rounded-2xl border border-white/10 bg-white/[0.025] animate-pulse"
+    >
       {/* Header row - matches AssetCard header */}
       <div className="flex items-center justify-between">
         <div className="w-10 h-10 rounded-xl bg-white/10 border border-white/10" />
@@ -119,6 +128,10 @@ export default function BalancesWidget() {
   const [data, setData] = useState<WalletBalances | null>(null);
   const [loading, setLoading] = useState(true);
   const [spinning, setSpinning] = useState(false);
+  const [newActivity, setNewActivity] = useState(false);
+  const activityTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastStreamAt = React.useRef(0);
+  const lastStreamAccount = React.useRef<string | null>(null);
 
   const load = useCallback(async (manual = false) => {
     if (manual) {
@@ -128,6 +141,10 @@ export default function BalancesWidget() {
     try {
       const result = await fetchBalances();
       setData(result);
+    } catch {
+      // A failed refresh must not clear the balances we already have; when
+      // there is nothing to show the skeleton contract keeps the loading
+      // placeholders in the grid (see data-testid="balance-skeleton").
     } finally {
       if (manual) {
         setLoading(false);
@@ -146,6 +163,9 @@ export default function BalancesWidget() {
         if (mounted) {
           setData(result);
         }
+      } catch {
+        // Swallow so the initial fetch cannot surface as an unhandled
+        // rejection; `data` stays null and the skeletons remain rendered.
       } finally {
         if (mounted) {
           setLoading(false);
@@ -157,6 +177,44 @@ export default function BalancesWidget() {
       mounted = false;
     };
   }, []);
+
+  // ── Live Horizon SSE stream ─────────────────────────────────────────────
+  useEffect(() => {
+    const handleStreamActivity = () => {
+      const now = Date.now();
+      if (now - lastStreamAt.current < 2000) return;
+      lastStreamAt.current = now;
+
+      load();
+      setNewActivity(true);
+      if (activityTimeout.current) clearTimeout(activityTimeout.current);
+      activityTimeout.current = setTimeout(() => setNewActivity(false), 3000);
+    };
+
+    const handleStreamStatus = (state: {
+      status: string;
+      account: string | null;
+    }) => {
+      if (
+        state.status === "connected" &&
+        state.account &&
+        state.account !== lastStreamAccount.current
+      ) {
+        lastStreamAccount.current = state.account;
+        load();
+      }
+    };
+
+    const unsubscribeEvent = subscribeAccountStream(handleStreamActivity);
+    const unsubscribeStatus = subscribeAccountStreamStatus(handleStreamStatus);
+    startAccountStream();
+
+    return () => {
+      unsubscribeEvent();
+      unsubscribeStatus();
+      if (activityTimeout.current) clearTimeout(activityTimeout.current);
+    };
+  }, [load]);
 
   return (
     <div className="rounded-3xl border border-white/10 bg-white/[0.02] backdrop-blur-sm p-6 space-y-5">
@@ -179,10 +237,17 @@ export default function BalancesWidget() {
               })}
             </p>
           )}
+          {newActivity && (
+            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#4ade80]/10 border border-[#4ade80]/20 text-[#4ade80] text-[9px] font-bold uppercase tracking-widest animate-pulse">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#4ade80]" />
+              Live
+            </span>
+          )}
           <button
             id="balances-refresh"
             onClick={() => load(true)}
             disabled={spinning}
+            aria-label="Refresh balances"
             className="p-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-all"
           >
             <RefreshCw
@@ -215,17 +280,37 @@ export default function BalancesWidget() {
           </span>
         </motion.div>
       ) : (
-        <div className="px-5 py-4 rounded-2xl bg-white/5 border border-white/10 animate-pulse h-[72px]" />
+        <div
+          data-testid="balances-total-skeleton"
+          className="px-5 py-4 rounded-2xl bg-white/5 border border-white/10 animate-pulse h-[72px]"
+        />
       )}
 
       {/* Asset cards grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        {loading || !data
-          ? [0, 1, 2].map((i) => <SkeletonCard key={i} />)
-          : data.balances.map((asset, i) => (
-              <AssetCard key={asset.asset} asset={asset} index={i} />
-            ))}
-      </div>
+      {loading || !data ? (
+        <div
+          role="status"
+          aria-label="Loading balances"
+          aria-live="polite"
+          aria-busy="true"
+          data-testid="balances-grid"
+          className="grid grid-cols-1 sm:grid-cols-3 gap-3"
+        >
+          {[0, 1, 2].map((i) => (
+            <SkeletonCard key={i} />
+          ))}
+        </div>
+      ) : (
+        <div
+          data-testid="balances-grid"
+          aria-busy="false"
+          className="grid grid-cols-1 sm:grid-cols-3 gap-3"
+        >
+          {data.balances.map((asset, i) => (
+            <AssetCard key={asset.asset} asset={asset} index={i} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

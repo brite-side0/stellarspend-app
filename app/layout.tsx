@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
 import ClientLayout from "@/components/ClientLayout";
@@ -10,26 +9,26 @@ import { I18nProvider } from "@/components/I18nProvider";
 import Footer from "@/components/footer/Footer";
 import Navbar from "@/components/navbar/Navbar";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
 export const metadata: Metadata = {
   title: "StellarSpend — Financial Freedom on the Blockchain",
   description:
     "StellarSpend helps the unbanked and underbanked track spending, manage budgets, and build savings using the low-cost Stellar blockchain. No bank account required.",
-  keywords: ["stellar", "blockchain", "budgeting", "finance", "XLM", "USDC", "unbanked"],
+  keywords: [
+    "stellar",
+    "blockchain",
+    "budgeting",
+    "finance",
+    "XLM",
+    "USDC",
+    "unbanked",
+  ],
   openGraph: {
     title: "StellarSpend — Financial Freedom on the Blockchain",
-    description:
-      "Track spending, manage budgets, and build savings on the Stellar network.",
+    description: "Smart spending for the Stellar ecosystem",
     type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
   },
 };
 
@@ -42,8 +41,13 @@ export default function RootLayout({
   return (
     <html lang="en" dir="ltr">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased font-sans`}
+        className="antialiased font-sans"
       >
+        <noscript>
+          <div className="p-4 bg-amber-500/10 border-b border-amber-500/20 text-amber-200 text-center text-sm">
+            Please enable JavaScript to use StellarSpend.
+          </div>
+        </noscript>
         <I18nProvider initialLanguage="en">
           <NotificationProvider>
             <ClientLayout>

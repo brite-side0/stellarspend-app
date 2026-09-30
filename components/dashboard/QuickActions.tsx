@@ -2,15 +2,13 @@
 
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Download, PieChart, Target, X } from "lucide-react";
+import { Send, Download, PieChart, Target, Users, X, Loader2, AlertCircle } from "lucide-react";
 import SendPaymentModal from "../transactions/SendPaymentModal";
-
-// Module-level constant — Math.random() runs once when the module loads,
-// never during a component render, so the react-hooks/purity rule is satisfied.
-const QR_CELLS: readonly boolean[] = Array.from(
-  { length: 16 },
-  () => Math.random() > 0.5,
-);
+import useWallet from "@/hooks/useWallet";
+import { useOffline } from "@/components/offline/OfflineProvider";
+import { useNotifications } from "@/context/NotificationContext";
+import { createBudget, isBudgetContractConfigured } from "@/lib/stellar/budgetContract";
+import type { Budget } from "@/lib/api/client";
 
 // ─── Mini Receive Modal ──────────────────────────────────────────────────────
 function ReceiveModal({ onClose }: { onClose: () => void }) {
@@ -77,11 +75,85 @@ function ReceiveModal({ onClose }: { onClose: () => void }) {
 
 // ─── Budget / Goal Modals ────────────────────────────────────────────────────
 function BudgetModal({ onClose }: { onClose: () => void }) {
+  const { freighter } = useWallet();
+  const publicKey = freighter.publicKey;
+  const { isOnline, queueAction } = useOffline();
+  const { addNotification } = useNotifications();
+
+  const [category, setCategory] = useState("");
+  const [limit, setLimit] = useState("");
+  const [asset, setAsset] = useState<Budget["asset"]>("USDC");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [txStatus, setTxStatus] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const parsedLimit = parseFloat(limit);
+  const isValid =
+    category.trim().length > 0 &&
+    !Number.isNaN(parsedLimit) &&
+    parsedLimit > 0;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!isValid) {
+      setFormError("Enter a category and a positive monthly limit.");
+      return;
+    }
+    setFormError(null);
+
+    const now = new Date();
+    const endDate = new Date(now);
+    endDate.setMonth(endDate.getMonth() + 1);
+
+    const budgetData: Omit<Budget, "id" | "createdAt" | "updatedAt"> = {
+      name: category.trim(),
+      category: category.trim().toLowerCase(),
+      amount: parsedLimit,
+      asset,
+      startDate: now.toISOString().split("T")[0],
+      endDate: endDate.toISOString().split("T")[0],
+    };
+
+    if (!isOnline) {
+      queueAction("CREATE_BUDGET", `Create budget: ${budgetData.name}`, budgetData);
+      addNotification(
+        "success",
+        `Offline: Your budget "${budgetData.name}" has been queued and will be saved when you reconnect.`
+      );
+      onClose();
+      return;
+    }
+
+    // Without a deployed budget contract, createBudget falls back to the
+    // localStorage data layer, so a wallet is only needed for the on-chain path.
+    if (isBudgetContractConfigured() && !publicKey) {
+      setFormError("Connect your Freighter wallet to persist this budget on-chain.");
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      await createBudget(publicKey ?? "", budgetData, (status) => setTxStatus(status));
+      addNotification(
+        "success",
+        `Budget "${budgetData.name}" created successfully. (${parsedLimit} ${asset} / month)`
+      );
+      onClose();
+    } catch (error: unknown) {
+      console.error("Failed to create budget:", error);
+      const errMessage = error instanceof Error ? error.message : String(error);
+      setFormError(errMessage || "Failed to create budget on-chain.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-        onClick={onClose}
+        onClick={() => !submitting && onClose()}
       />
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -91,7 +163,8 @@ function BudgetModal({ onClose }: { onClose: () => void }) {
       >
         <button
           onClick={onClose}
-          className="absolute top-5 right-5 text-[#7a8aaa] hover:text-white transition-colors"
+          disabled={submitting}
+          className="absolute top-5 right-5 text-[#7a8aaa] hover:text-white transition-colors disabled:opacity-50"
         >
           <X className="w-5 h-5" />
         </button>
@@ -99,31 +172,83 @@ function BudgetModal({ onClose }: { onClose: () => void }) {
         <p className="text-[#7a8aaa] text-sm mb-6">
           Set a monthly spending limit by category.
         </p>
-        <div className="space-y-4">
+
+        {formError && (
+          <div className="mb-6 p-4 rounded-2xl bg-red-500/10 border border-red-500/20 flex gap-3 text-red-400 text-xs">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span className="font-semibold">{formError}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="text-[#7a8aaa] text-xs uppercase tracking-widest mb-2 block">
               Category
             </label>
             <input
               type="text"
-              placeholder="e.g. Food, Transport…"
-              className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-[#7a8aaa]/50 focus:outline-none focus:ring-2 focus:ring-[#e8b84b]/30 focus:border-[#e8b84b]/40 transition-all"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              placeholder="e.g. Groceries, Transport…"
+              required
+              disabled={submitting}
+              className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-[#7a8aaa]/50 focus:outline-none focus:ring-2 focus:ring-[#e8b84b]/30 focus:border-[#e8b84b]/40 transition-all disabled:opacity-50"
             />
           </div>
           <div>
             <label className="text-[#7a8aaa] text-xs uppercase tracking-widest mb-2 block">
-              Monthly Limit (USDC)
+              Monthly Limit ({asset})
             </label>
             <input
               type="number"
+              step="any"
+              min="0.01"
+              value={limit}
+              onChange={(e) => setLimit(e.target.value)}
               placeholder="0.00"
-              className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-[#7a8aaa]/50 focus:outline-none focus:ring-2 focus:ring-[#e8b84b]/30 focus:border-[#e8b84b]/40 transition-all"
+              required
+              disabled={submitting}
+              className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-[#7a8aaa]/50 focus:outline-none focus:ring-2 focus:ring-[#e8b84b]/30 focus:border-[#e8b84b]/40 transition-all disabled:opacity-50"
             />
           </div>
-          <button className="w-full py-3 bg-[#e8b84b] text-[#1a0f00] font-bold rounded-xl hover:bg-[#f0c85a] transition-all hover:-translate-y-0.5 shadow-lg shadow-[#e8b84b]/20 active:translate-y-0 mt-2">
-            Create Budget
+          <div>
+            <span className="text-[#7a8aaa] text-xs uppercase tracking-widest mb-2 block">
+              Asset
+            </span>
+            <div className="grid grid-cols-3 gap-2">
+              {(["USDC", "XLM", "EURC"] as const).map((a) => (
+                <button
+                  key={a}
+                  type="button"
+                  onClick={() => setAsset(a)}
+                  disabled={submitting}
+                  className={`py-2.5 rounded-xl text-xs font-bold transition-all border ${
+                    asset === a
+                      ? "bg-[#e8b84b] text-[#1a0f00] border-[#e8b84b] shadow-lg shadow-[#e8b84b]/20"
+                      : "bg-white/[0.03] border-white/10 text-[#7a8aaa] hover:text-white hover:bg-white/[0.06]"
+                  }`}
+                >
+                  {a}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={!isValid || submitting}
+            className="w-full py-3 bg-[#e8b84b] text-[#1a0f00] font-bold rounded-xl hover:bg-[#f0c85a] transition-all hover:-translate-y-0.5 shadow-lg shadow-[#e8b84b]/20 active:translate-y-0 mt-2 disabled:opacity-50 disabled:hover:translate-y-0 disabled:shadow-none flex items-center justify-center gap-2"
+          >
+            {submitting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                {txStatus || "Processing…"}
+              </>
+            ) : (
+              "Create Budget"
+            )}
           </button>
-        </div>
+        </form>
       </motion.div>
     </div>
   );
@@ -190,6 +315,7 @@ const ACTIONS = [
   {
     id: "send",
     label: "Send",
+    ariaLabel: "Send payment",
     icon: Send,
     color: "#e8b84b",
     bg: "bg-[#e8b84b]/10",
@@ -199,6 +325,7 @@ const ACTIONS = [
   {
     id: "receive",
     label: "Receive",
+    ariaLabel: "Receive payment",
     icon: Download,
     color: "#4ade80",
     bg: "bg-[#4ade80]/10",
@@ -208,6 +335,7 @@ const ACTIONS = [
   {
     id: "budget",
     label: "New Budget",
+    ariaLabel: "Create new budget",
     icon: PieChart,
     color: "#4aa9e8",
     bg: "bg-[#4aa9e8]/10",
@@ -217,6 +345,7 @@ const ACTIONS = [
   {
     id: "goal",
     label: "New Goal",
+    ariaLabel: "Create new savings goal",
     icon: Target,
     color: "#a78bfa",
     bg: "bg-[#a78bfa]/10",
@@ -225,7 +354,15 @@ const ACTIONS = [
   },
 ] as const;
 
-export default function QuickActions() {
+interface QuickActionsProps {
+  /**
+   * Opens the split-bill flow owned by the parent, so splits created from here
+   * keep flowing into the parent's single source of truth.
+   */
+  onSplitBill?: () => void;
+}
+
+export default function QuickActions({ onSplitBill }: QuickActionsProps) {
   const [openModal, setOpenModal] = useState<ModalId>(null);
 
   return (
@@ -242,6 +379,7 @@ export default function QuickActions() {
             <motion.button
               key={action.id}
               id={`quick-action-${action.id}`}
+              aria-label={action.ariaLabel}
               onClick={() => setOpenModal(action.id as ModalId)}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -263,6 +401,24 @@ export default function QuickActions() {
               </span>
             </motion.button>
           ))}
+          <motion.button
+            id="quick-action-split"
+            aria-label="Split a bill"
+            onClick={() => onSplitBill?.()}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: ACTIONS.length * 0.07 }}
+            whileHover={{ y: -3 }}
+            whileTap={{ scale: 0.96 }}
+            className="flex flex-col items-center gap-3 p-5 rounded-2xl border bg-[#fb7185]/10 border-[#fb7185]/20 hover:border-[#fb7185]/50 hover:bg-[#fb7185]/15 transition-all duration-200 group"
+          >
+            <div className="p-3 rounded-xl bg-[#fb7185]/10 border border-[#fb7185]/20">
+              <Users className="w-5 h-5" style={{ color: "#fb7185" }} />
+            </div>
+            <span className="text-xs font-bold text-[#e8edf8] uppercase tracking-wider group-hover:text-white transition-colors">
+              Split Bill
+            </span>
+          </motion.button>
         </div>
       </div>
 

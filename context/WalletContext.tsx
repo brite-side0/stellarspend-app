@@ -11,6 +11,27 @@ import {
   setPassphraseSet,
   resetEncryption,
 } from "../lib/crypto/localEncryption";
+import {
+  getProvider,
+  type WalletProviderId,
+} from "../lib/wallet-providers";
+import { fetchBalancesForAddress } from "../lib/api/horizon";
+
+/**
+ * Connection state for the active wallet provider (Freighter, Ledger, xBull,
+ * Albedo). Kept in context so every consumer — the navbar connect button,
+ * send-payment modals, goal forms, etc. — observes the same connection.
+ */
+export interface WalletProviderState {
+  /** The provider currently connected (if any). */
+  providerId: WalletProviderId | null;
+  isInstalled: boolean;
+  isConnected: boolean;
+  publicKey: string | null;
+  isConnecting: boolean;
+  /** Named walletError to avoid clash with wallet context `error`. */
+  walletError: string | null;
+}
 
 export interface Wallet {
   id: string;
@@ -24,8 +45,24 @@ export interface Wallet {
   };
   isDefault: boolean;
   createdAt: number;
+  /**
+   * True when this wallet is linked to a connected signing provider
+   * (e.g. Freighter) and can sign transactions. False/undefined means
+   * the wallet was added manually and is watch-only.
+   */
+  isFreighterLinked?: boolean;
 }
-
+/**
+ * Represents the wallet context state and actions managed by WalletProvider.
+ *
+ * Managed State:
+ * - `wallets`: List of stored wallets including public key, address, balances, and metadata.
+ * - `selectedWallet`: Currently active wallet selected for transactions and views.
+ * - `isLoading`: Boolean indicating whether wallet data is being loaded or processed.
+ * - `isUnlocked`: Boolean indicating whether local encrypted storage is unlocked with session passphrase.
+ * - `error`: Error message string if a wallet operation fails, or null if no error.
+ * - `passphraseSet`: Boolean indicating if an encryption passphrase has been configured.
+ */
 export interface WalletContextType {
   wallets: Wallet[];
   selectedWallet: Wallet | null;
@@ -33,6 +70,11 @@ export interface WalletContextType {
   isUnlocked: boolean;
   error: string | null;
   passphraseSet: boolean;
+  // Shared wallet-provider connection state (connect/disconnect in one place
+  // so the navbar and payment modals stay in sync).
+  walletProvider: WalletProviderState;
+  connectWalletProvider: (providerId?: WalletProviderId) => Promise<void>;
+  disconnectWalletProvider: () => void;
   addWallet: (wallet: Omit<Wallet, "id" | "createdAt">) => void;
   removeWallet: (id: string) => void;
   selectWallet: (id: string) => void;
@@ -102,6 +144,152 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [passphraseSet, setPassphraseSetState] = useState(isPassphraseSet());
   const [sessionPassphrase, setSessionPassphrase] = useState<string | null>(null);
+  const [walletProvider, setWalletProvider] = useState<WalletProviderState>({
+    providerId: null,
+    isInstalled: false,
+    isConnected: false,
+    publicKey: null,
+    isConnecting: false,
+    walletError: null,
+  });
+
+  // Connect a wallet provider (Freighter, Ledger, xBull, Albedo) and share the
+  // result with every consumer through context.
+  const connectWalletProvider = useCallback(
+    async (providerId: WalletProviderId = "freighter") => {
+      const provider = getProvider(providerId);
+      const installed = await provider.isAvailable().catch(() => false);
+
+      if (!installed && provider.getMeta().kind !== "web") {
+        setWalletProvider({
+          providerId,
+          isInstalled: false,
+          isConnected: false,
+          publicKey: null,
+          isConnecting: false,
+          walletError: `${provider.getMeta().name} not found. Install ${
+            provider.getMeta().kind === "extension" ? "the extension" : "it"
+          } to continue.`,
+        });
+        return;
+      }
+
+      setWalletProvider({
+        providerId,
+        isInstalled: installed,
+        isConnected: false,
+        publicKey: null,
+        isConnecting: true,
+        walletError: null,
+      });
+
+      try {
+        const publicKey = await provider.connect();
+        if (!publicKey) throw new Error("No public key returned.");
+
+        setWalletProvider({
+          providerId,
+          isInstalled: true,
+          isConnected: true,
+          publicKey,
+          isConnecting: false,
+          walletError: null,
+        });
+
+        // Link the connected public key to a real wallet entry so it shows
+        // up (and is selected) in the wallet switcher immediately, instead
+        // of leaving the connection stuck in local provider state.
+        const existing = wallets.find(
+          (w) => w.publicKey.toLowerCase() === publicKey.toLowerCase(),
+        );
+
+        const walletId = existing?.id ?? crypto.randomUUID();
+
+        if (existing) {
+          setWallets((prev) =>
+            prev.map((w) =>
+              w.id === existing.id ? { ...w, isFreighterLinked: true } : w,
+            ),
+          );
+        } else {
+          const newWallet: Wallet = {
+            id: walletId,
+            name: provider.getMeta().name,
+            address: publicKey,
+            publicKey,
+            balance: { xlm: "0.00", usdc: "0.00", eurc: "0.00" },
+            isDefault: wallets.length === 0,
+            isFreighterLinked: true,
+            createdAt: Date.now(),
+          };
+          setWallets((prev) => [...prev, newWallet]);
+        }
+
+        setSelectedWalletId(walletId);
+
+        // Replace the placeholder/mock balance with a real fetch.
+        try {
+          const result = await fetchBalancesForAddress(publicKey);
+          const balance: Wallet["balance"] = { xlm: "0.00" };
+          for (const b of result.balances) {
+            if (b.asset === "XLM") balance.xlm = b.balance;
+            if (b.asset === "USDC") balance.usdc = b.balance;
+            if (b.asset === "EURC") balance.eurc = b.balance;
+          }
+          setWallets((prev) =>
+            prev.map((w) => (w.id === walletId ? { ...w, balance } : w)),
+          );
+        } catch (balanceErr) {
+          console.error("Failed to fetch balance for linked wallet:", balanceErr);
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Failed to connect wallet.";
+        setWalletProvider({
+          providerId,
+          isInstalled: installed,
+          isConnected: false,
+          publicKey: null,
+          isConnecting: false,
+          walletError: message,
+        });
+      }
+    },
+    [wallets],
+  );
+
+  const disconnectWalletProvider = useCallback(() => {
+    if (walletProvider.providerId) {
+      try {
+        getProvider(walletProvider.providerId).disconnect();
+      } catch {
+        // Ignore provider teardown failures; the connection state is cleared
+        // regardless.
+      }
+    }
+
+    // Mark the linked wallet as no longer signable, but keep it in the list
+    // (watch-only) rather than removing it.
+    if (walletProvider.publicKey) {
+      const publicKey = walletProvider.publicKey;
+      setWallets((prev) =>
+        prev.map((w) =>
+          w.publicKey.toLowerCase() === publicKey.toLowerCase()
+            ? { ...w, isFreighterLinked: false }
+            : w,
+        ),
+      );
+    }
+
+    setWalletProvider({
+      providerId: null,
+      isInstalled: false,
+      isConnected: false,
+      publicKey: null,
+      isConnecting: false,
+      walletError: null,
+    });
+  }, [walletProvider.providerId, walletProvider.publicKey]);
 
   // Load wallets from localStorage on mount
   const loadWallets = useCallback(async (passphrase?: string) => {
@@ -382,7 +570,17 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   const selectWallet = useCallback((id: string) => {
     setSelectedWalletId(id);
-  }, []);
+    // Keep the plaintext storage consumed by getConnectedPublicKey() in sync
+    // when no passphrase is configured (demo mode), so the live Horizon
+    // stream and widget fetches follow the switcher immediately.
+    if (!sessionPassphrase) {
+      try {
+        localStorage.setItem(SELECTED_WALLET_KEY, id);
+      } catch (err) {
+        console.error("Failed to persist selected wallet:", err);
+      }
+    }
+  }, [sessionPassphrase]);
 
   const updateWalletBalance = useCallback((id: string, balance: Wallet["balance"]) => {
     setWallets((prev) =>
@@ -438,6 +636,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     isUnlocked,
     error,
     passphraseSet,
+    walletProvider,
+    connectWalletProvider,
+    disconnectWalletProvider,
     addWallet,
     removeWallet,
     selectWallet,

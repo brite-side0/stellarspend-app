@@ -1,0 +1,77 @@
+import React, { act } from 'react';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, expect, test, jest } from '@jest/globals';
+import SpendingLimitCard from '../SpendingLimitCard';
+import type { SpendingLimit } from '@/lib/stellar/spendingLimitsContract';
+
+describe('SpendingLimitCard', () => {
+  const mockLimit: SpendingLimit = {
+    id: 'limit_1',
+    publicKey: 'GTEST123',
+    asset: 'USDC',
+    limitAmount: 100,
+    spentAmount: 80,
+    period: 'weekly',
+    periodStart: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  test('renders spending limit details correctly', () => {
+    render(<SpendingLimitCard limit={mockLimit} onDelete={jest.fn()} />);
+
+    expect(screen.getByRole('heading', { name: 'USDC' })).toBeInTheDocument();
+    expect(screen.getByText('weekly')).toBeInTheDocument();
+    expect(screen.getByText(/80%/)).toBeInTheDocument();
+    expect(screen.getByText(/80 \/ 100 USDC/)).toBeInTheDocument();
+    expect(screen.getByText('20')).toBeInTheDocument();
+  });
+
+  test('shows delete confirmation prompt on delete click and handles deletion', async () => {
+    const onDelete = jest.fn();
+    render(<SpendingLimitCard limit={mockLimit} onDelete={onDelete} />);
+
+    const deleteBtn = screen.getByRole('button', { name: /Delete (spending|USDC) limit/i });
+    fireEvent.click(deleteBtn);
+
+    expect(screen.getByText(/Delete this limit\?/i)).toBeInTheDocument();
+
+    const confirmBtn = screen.getByRole('button', { name: /Confirm Delete/i });
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+    });
+
+    expect(onDelete).toHaveBeenCalledWith('limit_1');
+  });
+
+  test('applies red status color at 90% utilization', () => {
+    const highUsageLimit: SpendingLimit = {
+      ...mockLimit,
+      limitAmount: 100,
+      spentAmount: 90,
+    };
+
+    const { container } = render(
+      <SpendingLimitCard limit={highUsageLimit} onDelete={jest.fn()} />,
+    );
+
+    const percentLabel = screen.getByText(/90%/);
+    expect(percentLabel).toHaveClass('text-red-400');
+    expect(
+      container.querySelector('.from-red-500'),
+    ).toBeInTheDocument();
+  });
+
+  test('shows confirmation UI before invoking onDelete', () => {
+    const onDelete = jest.fn();
+    render(<SpendingLimitCard limit={mockLimit} onDelete={onDelete} />);
+
+    const deleteBtn = screen.getByRole('button', { name: /Delete USDC limit/i });
+    fireEvent.click(deleteBtn);
+
+    expect(screen.getByText(/Delete this limit\?/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Confirm Delete/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+});

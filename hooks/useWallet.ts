@@ -1,27 +1,51 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { useWalletContext, Wallet } from "@/context/WalletContext";
+/**
+ * hooks/useWallet.ts
+ *
+ * Combines wallet context (multi-wallet management, selection, balance refresh)
+ * with a wallet-provider abstraction supporting Freighter, Ledger, xBull, and
+ * Albedo.  Provides a single hook for connecting/disconnecting any supported
+ * wallet, formatting addresses, and aggregating balances across all managed
+ * wallets.
+ */
 
-// ── Freighter browser extension type declaration ──────────────────────────────
-declare global {
-  interface Window {
-    freighter?: {
-      isConnected: () => Promise<boolean>;
-      getPublicKey: () => Promise<string>;
-      requestAccess: () => Promise<string>;
-      signTransaction: (xdr: string, network: string) => Promise<string>;
-    };
-  }
-}
+import { useCallback } from "react";
+import {
+  useWalletContext,
+  type Wallet,
+  type WalletProviderState,
+} from "@/context/WalletContext";
+import {
+  getProvider,
+  type WalletProvider,
+  type WalletProviderId,
+} from "@/lib/wallet-providers";
+import {
+  submitPaymentTransaction,
+  type PaymentStatus,
+  type PendingPayment,
+  type SubmittedPayment,
+} from "@/lib/stellar/submitTransaction";
+import type {
+  PaymentAsset,
+  PaymentAssetIssuers,
+} from "@/lib/stellar/buildPaymentTransaction";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-export interface FreighterState {
-  isInstalled: boolean;
-  isConnected: boolean;
-  publicKey: string | null;
-  isConnecting: boolean;
-  freighterError: string | null; // named freighterError to avoid clash with wallet context `error`
+
+// The shared connection state now lives in WalletContext so the navbar and any
+// payment surface observe the same connection. Re-exported for compatibility.
+export type { WalletProviderState } from "@/context/WalletContext";
+
+export interface SendPaymentInput {
+  destination: string;
+  amount: string;
+  asset: PaymentAsset;
+  memo?: string;
+  assetIssuers?: PaymentAssetIssuers;
+  onStatus?: (status: PaymentStatus) => void;
+  onSubmitted?: (payment: PendingPayment) => void;
 }
 
 export interface UseWalletReturn {
@@ -37,10 +61,18 @@ export interface UseWalletReturn {
   updateWalletName: (id: string, name: string) => void;
   setDefaultWallet: (id: string) => void;
   refreshBalances: () => Promise<void>;
-  // Freighter
-  freighter: FreighterState;
+  // Wallet-provider state (generalised)
+  walletProvider: WalletProviderState;
+  connectProvider: (providerId?: WalletProviderId) => Promise<void>;
+  disconnectProvider: () => void;
+  /** Get the underlying WalletProvider instance (e.g. for direct signing). */
+  getActiveProvider: () => WalletProvider | null;
+  // ── Legacy helpers (preserved for backward compat) ──
+  freighter: WalletProviderState;
   connectFreighter: () => Promise<void>;
   disconnectFreighter: () => void;
+  sendPayment: (input: SendPaymentInput) => Promise<SubmittedPayment>;
+
   // Helpers
   getWalletById: (id: string) => Wallet | undefined;
   getWalletByAddress: (address: string) => Wallet | undefined;
@@ -49,81 +81,99 @@ export interface UseWalletReturn {
 }
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Provides combined wallet management and Freighter extension integration.
+ * Wraps the WalletContext for multi-wallet CRUD and adds Freighter connect/disconnect,
+ * address formatting, and cross-wallet balance aggregation.
+ * @returns A UseWalletReturn object with wallet state, Freighter state, and helper functions.
+ */
 export function useWallet(): UseWalletReturn {
   const context = useWalletContext();
+  const {
+    wallets,
+    selectedWallet,
+    isLoading,
+    error,
+    addWallet,
+    removeWallet,
+    selectWallet,
+    updateWalletBalance,
+    updateWalletName,
+    setDefaultWallet,
+    refreshBalances,
+    walletProvider,
+    connectWalletProvider,
+    disconnectWalletProvider,
+  } = context;
+  const providerState: WalletProviderState = walletProvider;
 
-  const [freighterState, setFreighterState] = useState<FreighterState>({
-    isInstalled: false,
-    isConnected: false,
-    publicKey: null,
-    isConnecting: false,
-    freighterError: null,
-  });
+  // ── Generic connect (delegates to the shared context) ────────────────────
 
-  const connectFreighter = useCallback(async () => {
-    const installed = typeof window !== "undefined" && !!window.freighter;
+  const connectProvider = useCallback(
+    (providerId?: WalletProviderId) => connectWalletProvider(providerId),
+    [connectWalletProvider],
+  );
 
-    if (!installed) {
-      setFreighterState((s) => ({
-        ...s,
-        isInstalled: false,
-        freighterError: "Freighter not found. Install the extension to continue.",
-      }));
-      window.open("https://freighter.app", "_blank", "noopener,noreferrer");
-      return;
-    }
+  const disconnectProvider = useCallback(
+    () => disconnectWalletProvider(),
+    [disconnectWalletProvider],
+  );
 
-    setFreighterState((s) => ({
-      ...s,
-      isInstalled: true,
-      isConnecting: true,
-      freighterError: null,
-    }));
-
+  const getActiveProvider = useCallback((): WalletProvider | null => {
+    if (!providerState.isConnected || !providerState.providerId) return null;
     try {
-      const publicKey = await window.freighter!.requestAccess();
-      if (!publicKey) throw new Error("No public key returned.");
-
-      setFreighterState((s) => ({
-        ...s,
-        isConnected: true,
-        publicKey,
-        isConnecting: false,
-        freighterError: null,
-      }));
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to connect Freighter.";
-      setFreighterState((s) => ({
-        ...s,
-        isConnected: false,
-        publicKey: null,
-        isConnecting: false,
-        freighterError: message,
-      }));
+      return getProvider(providerState.providerId);
+    } catch {
+      return null;
     }
-  }, []);
+  }, [providerState.isConnected, providerState.providerId]);
 
-  const disconnectFreighter = useCallback(() => {
-    setFreighterState((s) => ({
-      ...s,
-      isConnected: false,
-      publicKey: null,
-      freighterError: null,
-    }));
-  }, []);
+  // ── sendPayment: delegates to submitPaymentTransaction ─────────────────
+
+  const sendPayment = useCallback(
+    async (input: SendPaymentInput): Promise<SubmittedPayment> => {
+      const source = providerState.publicKey;
+      if (!source) {
+        throw new Error("Connect a wallet before sending a payment.");
+      }
+      return submitPaymentTransaction({
+        source,
+        destination: input.destination,
+        amount: input.amount,
+        asset: input.asset,
+        memo: input.memo,
+        assetIssuers: input.assetIssuers,
+        onStatus: input.onStatus,
+        onSubmitted: input.onSubmitted,
+      });
+    },
+    [providerState.publicKey],
+  );
+
+  // ── Legacy Freighter helpers (delegate to the shared context) ─────────────
+
+  const connectFreighter = useCallback(
+    () => connectWalletProvider("freighter"),
+    [connectWalletProvider],
+  );
+
+  const disconnectFreighter = useCallback(
+    () => disconnectWalletProvider(),
+    [disconnectWalletProvider],
+  );
 
   const getWalletById = useCallback(
-    (id: string) => context.wallets.find((w) => w.id === id),
-    [context.wallets]
+    (id: string) => wallets.find((w) => w.id === id),
+    [wallets]
   );
 
   const getWalletByAddress = useCallback(
     (address: string) =>
-      context.wallets.find(
+      wallets.find(
         (w) => w.address.toLowerCase() === address.toLowerCase()
       ),
-    [context.wallets]
+    [wallets]
   );
 
   const formatAddress = useCallback(
@@ -135,7 +185,7 @@ export function useWallet(): UseWalletReturn {
   );
 
   const getTotalBalance = useCallback(() => {
-    return context.wallets.reduce(
+    return wallets.reduce(
       (acc, w) => ({
         xlm: (parseFloat(acc.xlm) + (parseFloat(w.balance.xlm) || 0)).toFixed(2),
         usdc: (parseFloat(acc.usdc) + (parseFloat(w.balance.usdc || "0") || 0)).toFixed(2),
@@ -143,23 +193,30 @@ export function useWallet(): UseWalletReturn {
       }),
       { xlm: "0.00", usdc: "0.00", eurc: "0.00" }
     );
-  }, [context.wallets]);
+  }, [wallets]);
 
   return {
-    wallets: context.wallets,
-    selectedWallet: context.selectedWallet,
-    isLoading: context.isLoading,
-    error: context.error,
-    addWallet: context.addWallet,
-    removeWallet: context.removeWallet,
-    selectWallet: context.selectWallet,
-    updateWalletBalance: context.updateWalletBalance,
-    updateWalletName: context.updateWalletName,
-    setDefaultWallet: context.setDefaultWallet,
-    refreshBalances: context.refreshBalances,
-    freighter: freighterState,
+    wallets,
+    selectedWallet,
+    isLoading,
+    error,
+    addWallet,
+    removeWallet,
+    selectWallet,
+    updateWalletBalance,
+    updateWalletName,
+    setDefaultWallet,
+    refreshBalances,
+    // New generic provider state
+    walletProvider: providerState,
+    connectProvider,
+    disconnectProvider,
+    getActiveProvider,
+    // Legacy aliases
+    freighter: providerState,
     connectFreighter,
     disconnectFreighter,
+    sendPayment,
     getWalletById,
     getWalletByAddress,
     formatAddress,

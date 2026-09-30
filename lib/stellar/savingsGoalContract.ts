@@ -1,3 +1,12 @@
+/**
+ * lib/stellar/savingsGoalContract.ts
+ *
+ * Client for the on-chain savings-goal Soroban contract. Provides CRUD operations
+ * for savings goals, scheduled contributions, and round-up rules backed by a
+ * deployed Soroban contract when NEXT_PUBLIC_SAVINGS_CONTRACT_ID is configured,
+ * falling back to localStorage mock data for offline/testnet usage.
+ */
+
 import {
   Contract,
   TransactionBuilder,
@@ -12,6 +21,7 @@ import { getSorobanServer, getNetworkPassphrase } from '@/lib/api/stellar/client
 import type { Goal, GoalSchedule, RoundUpRule, Contribution } from '@/lib/types/savings';
 export type { Goal, GoalSchedule, RoundUpRule, Contribution };
 import { callContractView, submitContractTx, triggerNotification } from './budgetContract';
+import { createSchedule, addContribution } from '@/lib/savings/scheduler';
 
 const SAVINGS_CONTRACT_ID = process.env.NEXT_PUBLIC_SAVINGS_CONTRACT_ID ?? '';
 const LOCAL_GOALS_KEY = 'stellarspend_local_goals';
@@ -78,6 +88,15 @@ function toScVal(value: unknown) {
   return nativeToScVal(value);
 }
 
+/**
+ * Creates a new savings goal on the Soroban contract.
+ * @param goalId - A unique identifier for the goal.
+ * @param ownerPublicKey - The Stellar public key of the goal owner.
+ * @param targetAmount - The target savings amount.
+ * @param deadline - The deadline date as a string.
+ * @param recurrence - The contribution recurrence type.
+ * @returns The contract-assigned goal ID or transaction hash.
+ */
 export async function createGoalOnChain(
   goalId: string,
   ownerPublicKey: string,
@@ -93,6 +112,14 @@ export async function createGoalOnChain(
   return result;
 }
 
+/**
+ * Records a contribution to a savings goal on the Soroban contract.
+ * @param goalId - The ID of the savings goal.
+ * @param amount - The contribution amount.
+ * @param source - The contribution source (e.g. 'manual', 'round-up').
+ * @param accountPublicKey - The contributor's Stellar public key.
+ * @returns A confirmation string from the contract.
+ */
 export async function contributeToGoalOnChain(
   goalId: string,
   amount: number,
@@ -107,6 +134,12 @@ export async function contributeToGoalOnChain(
   return result;
 }
 
+/**
+ * Fetches the contribution schedule for a savings goal from the Soroban contract.
+ * @param goalId - The ID of the savings goal.
+ * @param accountPublicKey - The owner's Stellar public key.
+ * @returns The GoalSchedule for the given goal.
+ */
 export async function getGoalScheduleOnChain(
   goalId: string,
   accountPublicKey: string,
@@ -119,6 +152,14 @@ export async function getGoalScheduleOnChain(
   return result;
 }
 
+/**
+ * Configures the round-up rule for a savings goal on the Soroban contract.
+ * @param goalId - The ID of the savings goal.
+ * @param enabled - Whether round-up is enabled.
+ * @param nearestUnit - The rounding unit (e.g. 1 or 5).
+ * @param accountPublicKey - The owner's Stellar public key.
+ * @returns A promise that resolves when the round-up rule is configured.
+ */
 export async function setRoundUpRuleOnChain(
   goalId: string,
   enabled: boolean,
@@ -132,6 +173,12 @@ export async function setRoundUpRuleOnChain(
   );
 }
 
+/**
+ * Fetches the current round-up rule for a savings goal from the Soroban contract.
+ * @param goalId - The ID of the savings goal.
+ * @param accountPublicKey - The owner's Stellar public key.
+ * @returns The RoundUpRule configuration for the goal.
+ */
 export async function getRoundUpRuleOnChain(
   goalId: string,
   accountPublicKey: string,
@@ -144,6 +191,14 @@ export async function getRoundUpRuleOnChain(
   return result;
 }
 
+/**
+ * Applies a round-up contribution to a savings goal on the Soroban contract.
+ * @param goalId - The ID of the savings goal.
+ * @param transactionHash - The hash of the originating transaction.
+ * @param roundUpAmount - The round-up amount to contribute.
+ * @param accountPublicKey - The contributor's Stellar public key.
+ * @returns A promise that resolves when the round-up contribution is applied.
+ */
 export async function applyRoundUpOnChain(
   goalId: string,
   transactionHash: string,
@@ -157,6 +212,12 @@ export async function applyRoundUpOnChain(
   );
 }
 
+/**
+ * Pauses the contribution schedule for a savings goal on the Soroban contract.
+ * @param goalId - The ID of the savings goal.
+ * @param accountPublicKey - The owner's Stellar public key.
+ * @returns A promise that resolves when the schedule is paused.
+ */
 export async function pauseScheduleOnChain(
   goalId: string,
   accountPublicKey: string,
@@ -168,6 +229,12 @@ export async function pauseScheduleOnChain(
   );
 }
 
+/**
+ * Resumes a paused contribution schedule on the Soroban contract.
+ * @param goalId - The ID of the savings goal.
+ * @param accountPublicKey - The owner's Stellar public key.
+ * @returns A promise that resolves when the schedule is resumed.
+ */
 export async function resumeScheduleOnChain(
   goalId: string,
   accountPublicKey: string,
@@ -179,6 +246,12 @@ export async function resumeScheduleOnChain(
   );
 }
 
+/**
+ * Permanently cancels the contribution schedule for a savings goal on the Soroban contract.
+ * @param goalId - The ID of the savings goal.
+ * @param accountPublicKey - The owner's Stellar public key.
+ * @returns A promise that resolves when the schedule is cancelled.
+ */
 export async function cancelScheduleOnChain(
   goalId: string,
   accountPublicKey: string,
@@ -190,6 +263,12 @@ export async function cancelScheduleOnChain(
   );
 }
 
+/**
+ * Fetches the full contribution history for a savings goal from the Soroban contract.
+ * @param goalId - The ID of the savings goal.
+ * @param accountPublicKey - The owner's Stellar public key.
+ * @returns An array of Contribution records.
+ */
 export async function getContributionHistoryOnChain(
   goalId: string,
   accountPublicKey: string,
@@ -202,6 +281,11 @@ export async function getContributionHistoryOnChain(
   return result;
 }
 
+/**
+ * Loads mock savings goals from localStorage (fallback for offline/testnet usage).
+ * Returns a default "New Laptop" goal if nothing is stored.
+ * @returns An array of Goal objects.
+ */
 export function getMockGoalsFallback(): Goal[] {
   if (typeof window === 'undefined') return [];
   const stored = localStorage.getItem(LOCAL_GOALS_KEY);
@@ -226,16 +310,59 @@ export function getMockGoalsFallback(): Goal[] {
       deadline: '2024-12-31',
       recurrence: 'once',
       createdAt: new Date(),
+      updatedAt: new Date().toISOString(),
     },
   ];
 }
 
+/**
+ * Persists mock savings goals to localStorage.
+ * @param goals - The array of Goal objects to store.
+ * @returns Nothing.
+ */
 export function setMockGoalsFallback(goals: Goal[]) {
   if (typeof window !== 'undefined') {
     localStorage.setItem(LOCAL_GOALS_KEY, JSON.stringify(goals));
   }
 }
 
+/**
+ * Applies an offline-resolved update to a goal in the local cache.
+ *
+ * Used by the offline sync layer (`components/offline/syncAdapter.ts`) when a
+ * queued goal edit is replayed after reconnecting. On-chain goal edits are not
+ * part of the deployed contract surface yet, so this updates the locally
+ * persisted copy that the UI reads from.
+ *
+ * @param goalId - The ID of the goal to update.
+ * @param changes - The goal fields to merge into the stored goal.
+ * @returns The updated goal, or null when no goal with that id exists.
+ */
+export function updateGoalLocal(
+  goalId: string,
+  changes: Partial<Pick<Goal, 'name' | 'targetAmount' | 'deadline' | 'recurrence'>>
+): Goal | null {
+  const goals = getMockGoalsFallback();
+  const index = goals.findIndex((g) => g.id === goalId);
+  if (index === -1) {
+    return null;
+  }
+
+  goals[index] = {
+    ...goals[index],
+    ...changes,
+    updatedAt: new Date().toISOString(),
+  };
+  setMockGoalsFallback(goals);
+  return goals[index];
+}
+
+/**
+ * Fetches all savings goals for the given account from the Soroban contract.
+ * Falls back to localStorage mock data if the contract is not configured.
+ * @param publicKey - The Stellar public key of the goal owner.
+ * @returns An array of Goal objects.
+ */
 export async function fetchGoals(publicKey: string): Promise<Goal[]> {
   if (!SAVINGS_CONTRACT_ID) {
     return getMockGoalsFallback();
@@ -266,12 +393,40 @@ export async function fetchGoals(publicKey: string): Promise<Goal[]> {
   }
 }
 
+/**
+ * Creates a new savings goal on-chain (or locally if no contract is configured).
+ * @param publicKey - The Stellar public key of the goal owner.
+ * @param goalData - The goal details (title, target amount, deadline, recurrence).
+ *   `scheduleAmount` is the amount to contribute each period when recurrence is
+ *   'monthly' or 'yearly'; it is ignored for 'once' goals.
+ * @param statusCallback - Optional callback for progress updates.
+ * @returns The newly created Goal object.
+ */
 export async function createGoal(
   publicKey: string,
-  goalData: { title: string; targetAmount: number; deadline: string; recurrence: 'once' | 'monthly' | 'yearly' },
+  goalData: {
+    title: string;
+    targetAmount: number;
+    deadline: string;
+    recurrence: 'once' | 'monthly' | 'yearly';
+    scheduleAmount?: number;
+  },
   statusCallback?: (status: string) => void
 ): Promise<Goal> {
   const newId = `goal_${Date.now()}`;
+
+  // A goal with a recurring cadence needs a schedule to actually contribute
+  // on — this is the piece that was previously captured by the form but
+  // never wired to anything (issue #113). The contract call below still
+  // only receives the raw recurrence value (its own scheduling behavior is
+  // outside this repo's visibility), but the schedule attached here drives
+  // this app's own local due-contribution checking regardless of whether a
+  // contract is configured.
+  const schedule =
+    goalData.recurrence !== 'once' && goalData.scheduleAmount
+      ? createSchedule(goalData.recurrence, goalData.scheduleAmount)
+      : undefined;
+
   if (!SAVINGS_CONTRACT_ID) {
     const mockGoals = getMockGoalsFallback();
     const newGoal: Goal = {
@@ -282,6 +437,8 @@ export async function createGoal(
       deadline: goalData.deadline,
       recurrence: goalData.recurrence,
       createdAt: new Date(),
+      updatedAt: new Date().toISOString(),
+      schedule,
     };
     mockGoals.push(newGoal);
     setMockGoalsFallback(mockGoals);
@@ -311,6 +468,8 @@ export async function createGoal(
       deadline: goalData.deadline,
       recurrence: goalData.recurrence,
       createdAt: new Date(),
+      updatedAt: new Date().toISOString(),
+      schedule,
     };
     return newGoal;
   } catch (e: unknown) {
@@ -320,10 +479,20 @@ export async function createGoal(
   }
 }
 
+/**
+ * Contributes funds to a savings goal on-chain (or locally if no contract is configured).
+ * @param publicKey - The contributor's Stellar public key.
+ * @param goalId - The ID of the savings goal to contribute to.
+ * @param amount - The amount to contribute.
+ * @param source - Where this contribution came from. Defaults to 'manual'.
+ * @param statusCallback - Optional callback for progress updates.
+ * @returns A promise that resolves when the contribution is complete.
+ */
 export async function contributeToGoal(
   publicKey: string,
   goalId: string,
   amount: number,
+  source: Contribution['source'] = 'manual',
   statusCallback?: (status: string) => void
 ): Promise<void> {
   if (!SAVINGS_CONTRACT_ID) {
@@ -331,7 +500,18 @@ export async function contributeToGoal(
     const index = mockGoals.findIndex((g) => g.id === goalId);
     if (index !== -1) {
       mockGoals[index].currentAmount += amount;
+      mockGoals[index].updatedAt = new Date().toISOString();
       setMockGoalsFallback(mockGoals);
+      // Previously this never recorded a Contribution at all in local/mock
+      // mode, so the (already-built) contribution history UI had nothing
+      // to show for manual contributions made without a connected wallet.
+      addContribution({
+        id: `contrib_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        goalId,
+        amount,
+        source,
+        createdAt: new Date(),
+      });
     }
     return;
   }
@@ -348,6 +528,7 @@ export async function contributeToGoal(
     const index = mockGoals.findIndex((g) => g.id === goalId);
     if (index !== -1) {
       mockGoals[index].currentAmount += amount;
+      mockGoals[index].updatedAt = new Date().toISOString();
       setMockGoalsFallback(mockGoals);
     }
   } catch (e: unknown) {

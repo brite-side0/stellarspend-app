@@ -8,7 +8,8 @@ import { formatDistanceToNow } from "date-fns";
 
 export const NotificationsCenter: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
-  const { notifications, markAsRead, clearAll } = useNotifications();
+  const { notifications, markAsRead, markAllAsRead, removeNotification, clearAll } =
+      useNotifications();
   const unreadCount = notifications.filter((n) => !n.read).length;
   const dropdownRef = useRef<HTMLDivElement>(null);
   const firstNotificationRef = useRef<HTMLDivElement>(null);
@@ -74,24 +75,34 @@ export const NotificationsCenter: React.FC = () => {
                 <h3 className="font-display font-semibold text-lg text-white">
                   Notifications
                 </h3>
-                <div className="flex items-center gap-1">
-                  {notifications.length > 0 && (
-                    <button
-                      onClick={clearAll}
-                      className="p-2 text-[var(--color-text-secondary)] hover:text-red-400 transition-colors"
-                      title="Clear all"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
+               <div className="flex items-center gap-1">
+                {unreadCount > 0 && (
                   <button
-                    onClick={() => setIsOpen(false)}
-                    className="p-2 text-[var(--color-text-secondary)] hover:text-white transition-colors"
+                    onClick={markAllAsRead}
+                    className="px-3 py-2 text-xs font-medium text-[var(--color-text-secondary)] hover:text-[#e8b84b] transition-colors"
+                    title="Mark all as read"
                   >
-                    <X className="w-4 h-4" />
+                    Mark all as read
                   </button>
-                </div>
+                )}
+
+                {notifications.length > 0 && (
+                  <button
+                    onClick={clearAll}
+                    className="p-2 text-[var(--color-text-secondary)] hover:text-red-400 transition-colors"
+                    title="Clear all"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+                <button
+                  onClick={() => setIsOpen(false)}
+                  className="p-2 text-[var(--color-text-secondary)] hover:text-white transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
+            </div>
 
               <div className="flex-grow overflow-y-auto p-3 space-y-2 custom-scrollbar">
                 {notifications.length === 0 ? (
@@ -139,9 +150,23 @@ export const NotificationsCenter: React.FC = () => {
                         >
                           {n.message}
                         </span>
-                        {!n.read && (
-                          <div className="mt-1.5 h-2 w-2 rounded-full bg-[#e8b84b] shadow-[0_0_10px_rgba(232,184,75,0.5)] shrink-0" />
-                        )}
+                        <div className="flex items-center gap-2 shrink-0">
+                          {!n.read && (
+                            <div className="mt-1.5 h-2 w-2 rounded-full bg-[#e8b84b] shadow-[0_0_10px_rgba(232,184,75,0.5)]" />
+                          )}
+                          <button
+                            type="button"
+                            aria-label="Dismiss notification"
+                            title="Dismiss notification"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              removeNotification(n.id);
+                            }}
+                            className="rounded-lg p-1 text-[var(--color-text-secondary)] transition-colors hover:bg-white/10 hover:text-white"
+                          >
+                            <X className="h-4 w-4" aria-hidden="true" />
+                          </button>
+                        </div>
                       </div>
                       <span className="text-[10px] text-[var(--color-text-secondary)] font-mono tracking-tighter">
                         {formatDistanceToNow(n.timestamp, { addSuffix: true })}

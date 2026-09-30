@@ -6,19 +6,35 @@ import { motion } from "framer-motion";
 import {
   ArrowDownLeft,
   ArrowUpRight,
-  RefreshCw,
+  ArrowRight,
   ChevronRight,
   AlertCircle,
+  Inbox,
 } from "lucide-react";
 import { fetchTransactions, type Transaction } from "@/lib/api/client";
+import {
+  PAYMENT_CONFIRMED_EVENT,
+  PAYMENT_SUBMITTED_EVENT,
+  toTransactionRecord,
+  type PendingPayment,
+  type SubmittedPayment,
+} from "@/lib/stellar/submitTransaction";
+import {
+  startAccountStream,
+  subscribeAccountStream,
+  subscribeAccountStreamStatus,
+} from "@/lib/stellar/accountStream";
 
 function TxRow({ tx, index }: { tx: Transaction; index: number }) {
   const op = tx.operations[0];
   const isOut = op?.type === "payment" && op.from?.startsWith("GDQD");
   const failed = !tx.successful;
+  const pending = tx.status === "pending";
 
   const iconBg = failed
     ? "bg-red-500/10 text-red-400 border-red-500/20"
+    : pending
+      ? "bg-[#e8b84b]/10 text-[#e8b84b] border-[#e8b84b]/20"
     : isOut
       ? "bg-[#e8b84b]/10 text-[#e8b84b] border-[#e8b84b]/20"
       : "bg-[#4ade80]/10 text-[#4ade80] border-[#4ade80]/20";
@@ -74,7 +90,7 @@ function TxRow({ tx, index }: { tx: Transaction; index: number }) {
 
       {/* Status dot */}
       <div
-        className={`flex-shrink-0 w-2 h-2 rounded-full ${failed ? "bg-red-400" : "bg-[#4ade80]"}`}
+        className={`flex-shrink-0 w-2 h-2 rounded-full ${failed ? "bg-red-400" : pending ? "bg-[#e8b84b] animate-pulse" : "bg-[#4ade80]"}`}
       />
     </motion.div>
   );
@@ -99,13 +115,101 @@ function SkeletonRow() {
 export default function RecentTransactions() {
   const [txs, setTxs] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [newActivity, setNewActivity] = useState(false);
+  const livePaymentStatus = React.useRef(new Map<string, "pending" | "confirmed">());
+  const activityTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastStreamAt = React.useRef(0);
+  const lastStreamAccount = React.useRef<string | null>(null);
 
-  useEffect(() => {
+  const loadRecent = React.useCallback(() => {
     fetchTransactions(undefined, 1, 3).then((response) => {
-      setTxs(response.data);
+      const incoming = response.data;
+      setTxs((current) => {
+        const seen = new Set<string>();
+        return [...incoming, ...current]
+          .filter((tx) => {
+            if (seen.has(tx.hash)) return false;
+            seen.add(tx.hash);
+            return true;
+          })
+          .slice(0, 3);
+      });
       setLoading(false);
     });
   }, []);
+
+  useEffect(() => {
+    loadRecent();
+  }, [loadRecent]);
+
+  useEffect(() => {
+    const handlePaymentSubmitted = (event: Event) => {
+      const payment = (event as CustomEvent<PendingPayment>).detail;
+      if (!payment || livePaymentStatus.current.has(payment.hash)) return;
+      livePaymentStatus.current.set(payment.hash, "pending");
+      const transaction = toTransactionRecord(payment, "pending");
+      setTxs((current) => {
+        if (current.some((item) => item.hash === transaction.hash)) return current;
+        return [transaction, ...current].slice(0, 3);
+      });
+    };
+
+    const handlePaymentConfirmed = (event: Event) => {
+      const payment = (event as CustomEvent<SubmittedPayment>).detail;
+      if (!payment || livePaymentStatus.current.get(payment.hash) === "confirmed") return;
+      livePaymentStatus.current.set(payment.hash, "confirmed");
+      const transaction = toTransactionRecord(payment, "confirmed");
+      setTxs((current) => [
+        transaction,
+        ...current.filter((item) => item.hash !== transaction.hash),
+      ].slice(0, 3));
+    };
+
+    window.addEventListener(PAYMENT_SUBMITTED_EVENT, handlePaymentSubmitted);
+    window.addEventListener(PAYMENT_CONFIRMED_EVENT, handlePaymentConfirmed);
+    return () => {
+      window.removeEventListener(PAYMENT_SUBMITTED_EVENT, handlePaymentSubmitted);
+      window.removeEventListener(PAYMENT_CONFIRMED_EVENT, handlePaymentConfirmed);
+    };
+  }, []);
+
+  // ── Live Horizon SSE stream ─────────────────────────────────────────────
+  useEffect(() => {
+    const handleStreamActivity = () => {
+      const now = Date.now();
+      if (now - lastStreamAt.current < 2000) return;
+      lastStreamAt.current = now;
+
+      loadRecent();
+      setNewActivity(true);
+      if (activityTimeout.current) clearTimeout(activityTimeout.current);
+      activityTimeout.current = setTimeout(() => setNewActivity(false), 3000);
+    };
+
+    const handleStreamStatus = (state: {
+      status: string;
+      account: string | null;
+    }) => {
+      if (
+        state.status === "connected" &&
+        state.account &&
+        state.account !== lastStreamAccount.current
+      ) {
+        lastStreamAccount.current = state.account;
+        loadRecent();
+      }
+    };
+
+    const unsubscribeEvent = subscribeAccountStream(handleStreamActivity);
+    const unsubscribeStatus = subscribeAccountStreamStatus(handleStreamStatus);
+    startAccountStream();
+
+    return () => {
+      unsubscribeEvent();
+      unsubscribeStatus();
+      if (activityTimeout.current) clearTimeout(activityTimeout.current);
+    };
+  }, [loadRecent]);
 
   return (
     <div className="rounded-3xl border border-white/10 bg-white/[0.02] backdrop-blur-sm p-6">
@@ -116,10 +220,17 @@ export default function RecentTransactions() {
           <h2 className="text-sm font-black text-white uppercase tracking-[0.15em]">
             Recent Transactions
           </h2>
+          {newActivity && (
+            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#e8b84b]/10 border border-[#e8b84b]/20 text-[#e8b84b] text-[9px] font-bold uppercase tracking-widest animate-pulse">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#e8b84b]" />
+              New activity
+            </span>
+          )}
         </div>
         <Link
           href="/dashboard/transactions"
           id="view-all-transactions"
+          aria-label="View all transactions"
           className="flex items-center gap-1 text-xs text-[#e8b84b] font-bold uppercase tracking-widest hover:text-white transition-colors group"
         >
           View all
@@ -132,10 +243,25 @@ export default function RecentTransactions() {
         {loading ? (
           [0, 1, 2].map((i) => <SkeletonRow key={i} />)
         ) : txs.length === 0 ? (
-          <div className="text-center py-10">
-            <RefreshCw className="w-8 h-8 text-[#7a8aaa] mx-auto mb-3" />
-            <p className="text-[#7a8aaa] text-sm">No transactions yet.</p>
-          </div>
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="text-center py-12 px-4"
+          >
+            <div className="w-14 h-14 mx-auto mb-4 rounded-2xl border border-white/10 bg-white/[0.03] flex items-center justify-center">
+              <Inbox className="w-7 h-7 text-[#7a8aaa]" />
+            </div>
+            <p className="text-[#7a8aaa] text-sm max-w-xs mx-auto leading-relaxed">
+              No transactions yet. Send or receive funds to get started.
+            </p>
+            <Link
+              href="/dashboard/transactions"
+              className="inline-flex items-center gap-2 mt-5 px-5 py-2.5 bg-[#e8b84b] hover:bg-[#f0c85a] text-[#1a0f00] font-bold rounded-xl shadow-lg shadow-[#e8b84b]/20 transition-all hover:-translate-y-0.5 active:translate-y-0 text-xs uppercase tracking-wider group"
+            >
+              Send or Receive
+              <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+            </Link>
+          </motion.div>
         ) : (
           txs.map((tx, i) => <TxRow key={tx.id} tx={tx} index={i} />)
         )}
