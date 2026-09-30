@@ -2,6 +2,7 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
 import type { Contribution } from '@/lib/types/savings'
+import { Inbox } from 'lucide-react'
 
 interface ContributionHistoryProps {
   contributions: Contribution[]
@@ -35,9 +36,13 @@ export function ContributionHistory({
       </CardHeader>
       <CardContent>
         {sorted.length === 0 ? (
-          <p className="text-sm text-muted-foreground text-center py-4">
-            No contributions yet for &quot;{goalName}&quot;
-          </p>
+          <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
+            <Inbox className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
+            <p className="text-sm font-medium">No contributions yet</p>
+            <p className="text-xs text-muted-foreground">
+              Contributions to &quot;{goalName}&quot; will appear here.
+            </p>
+          </div>
         ) : (
           <div className="space-y-3">
             {sorted.map((contribution) => (
