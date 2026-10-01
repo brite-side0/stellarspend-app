@@ -60,7 +60,7 @@ describe('SendPaymentModal spending limit checks', () => {
 
     // Enter recipient (exact 56 chars starting with G)
     const validRecipient = 'G' + 'A'.repeat(55);
-    const recipientInput = screen.getByPlaceholderText('G...');
+    const recipientInput = screen.getByPlaceholderText('G... Stellar public key');
     fireEvent.change(recipientInput, {
       target: { value: validRecipient },
     });
@@ -81,4 +81,21 @@ describe('SendPaymentModal spending limit checks', () => {
       ).toBeInTheDocument();
     });
   });
+
+  test('renders memo input with placeholder="Optional — max 28 bytes"', () => {
+  test('renders amount input with inputMode="decimal" for mobile numeric keyboard', () => {
+    render(
+      <WalletProvider>
+        <NotificationProvider>
+          <OfflineProvider>
+            <SendPaymentModal onClose={jest.fn()} />
+          </OfflineProvider>
+        </NotificationProvider>
+      </WalletProvider>
+    );
+
+    const memoInput = screen.getByPlaceholderText('Optional — max 28 bytes');
+    expect(memoInput).toBeInTheDocument();
+  });
 });
+

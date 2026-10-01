@@ -9,7 +9,6 @@ import { useToast } from "@/components/ui/use-toast";
 import { getRemaining, recordSpend } from "@/lib/stellar/spendingLimitsContract";
 import {
   fetchPaymentFee,
-  PAYMENT_CONFIRMED_EVENT,
   PAYMENT_SUBMITTED_EVENT,
   type PaymentStatus,
   type PendingPayment,
@@ -225,7 +224,7 @@ export default function SendPaymentModal({ onClose }: SendPaymentModalProps) {
                 <input
                   id="payment-recipient"
                   type="text"
-                  placeholder="G..."
+                  placeholder="G... Stellar public key"
                   value={recipient}
                   onChange={(event) => setRecipient(event.target.value.trimStart())}
                   autoComplete="off"
@@ -241,8 +240,10 @@ export default function SendPaymentModal({ onClose }: SendPaymentModalProps) {
                   <input
                     id="payment-amount"
                     type="number"
+                    inputMode="decimal"
                     min="0"
                     step="0.0000001"
+                    inputMode="decimal"
                     placeholder="0.00"
                     value={amount}
                     onChange={(event) => setAmount(event.target.value)}
@@ -274,7 +275,7 @@ export default function SendPaymentModal({ onClose }: SendPaymentModalProps) {
                   id="payment-memo"
                   type="text"
                   maxLength={28}
-                  placeholder="Payment note..."
+                  placeholder="Optional — max 28 bytes"
                   value={memo}
                   onChange={(event) => setMemo(event.target.value)}
                   className="w-full px-4 py-3.5 bg-white/[0.03] border border-white/10 rounded-2xl text-white font-mono text-sm placeholder-[#7a8aaa]/40 focus:outline-none focus:ring-2 focus:ring-[#e8b84b]/30 focus:border-[#e8b84b]/40 transition-all"
