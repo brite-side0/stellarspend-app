@@ -68,6 +68,7 @@ export function getMockBudgetsFallback(): Budget[] {
 /**
  * Persists mock budgets to localStorage.
  * @param budgets - The array of Budget objects to store.
+ * @returns void
  */
 export function setMockBudgetsFallback(budgets: Budget[]): void {
   if (typeof window !== 'undefined') {
@@ -399,6 +400,7 @@ export async function updateBudget(
  * @param publicKey - The Stellar public key of the budget owner.
  * @param id - The ID of the budget to delete.
  * @param statusCallback - Optional callback for progress updates.
+ * @returns A promise that resolves when the budget is deleted.
  */
 export async function deleteBudget(
     publicKey: string,
