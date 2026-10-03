@@ -27,6 +27,9 @@ export const metadata: Metadata = {
     description: "Smart spending for the Stellar ecosystem",
     type: "website",
   },
+  robots: {
+    index: true,
+    follow: true,
   twitter: {
     card: "summary_large_image",
   },
