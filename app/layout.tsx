@@ -23,7 +23,7 @@ export const metadata: Metadata = {
     "unbanked",
   ],
   openGraph: {
-    title: "StellarSpend — Financial Freedom on the Blockchain",
+    title: "StellarSpend",
     description: "Smart spending for the Stellar ecosystem",
     type: "website",
   },
