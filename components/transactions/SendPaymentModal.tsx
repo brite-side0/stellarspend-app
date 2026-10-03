@@ -243,7 +243,6 @@ export default function SendPaymentModal({ onClose }: SendPaymentModalProps) {
                     inputMode="decimal"
                     min="0"
                     step="0.0000001"
-                    inputMode="decimal"
                     placeholder="0.00"
                     value={amount}
                     onChange={(event) => setAmount(event.target.value)}
