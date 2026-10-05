@@ -49,7 +49,7 @@ describe("Send Payment (#3)", () => {
     cy.connectWallet();
     openSendModal();
 
-    cy.get('input[placeholder="G..."]').type("not-a-valid-address");
+    cy.get('input[placeholder="G... Stellar public key"]').type("not-a-valid-address");
     cy.get('input[placeholder="0.00"]').type("50");
 
     cy.contains("button", "Sign and Send Payment").click();
@@ -62,7 +62,7 @@ describe("Send Payment (#3)", () => {
     cy.connectWallet();
     openSendModal();
 
-    cy.get('input[placeholder="G..."]').type(MOCK_PUBLIC_KEY);
+    cy.get('input[placeholder="G... Stellar public key"]').type(MOCK_PUBLIC_KEY);
     cy.get('input[placeholder="0.00"]').type("50");
 
     cy.contains("button", "Sign and Send Payment").click();

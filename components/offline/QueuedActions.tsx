@@ -8,13 +8,19 @@ import { QueuedAction, useOffline } from "./OfflineProvider";
  * QueuedActions displays a collapsible panel of actions that were queued
  * while the user was offline. It shows the count of pending actions and
  * provides buttons to retry syncing or clear the queue entirely.
+ *
+ * Retrying replays the queue with version checks, so an action that clashes
+ * with an edit made on another device is flagged here until the user decides.
  */
 export default function QueuedActions() {
-  const { queuedActions, retryQueuedActions, clearQueue, conflicts, isSyncing } = useOffline();
+  const { queuedActions, retryQueuedActions, clearQueue, pendingConflicts } =
+    useOffline();
   const [isOpen, setIsOpen] = useState(false);
 
   const queuedActionCount = queuedActions.length;
-  const conflictCount = conflicts?.length ?? 0;
+  const conflictedActionIds = new Set(
+    (pendingConflicts ?? []).map((conflict) => conflict.actionId),
+  );
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
@@ -45,14 +51,11 @@ export default function QueuedActions() {
         {queuedActionCount > 0 && (
           <div className="flex gap-2">
             <button
-              onClick={() => {
-                void retryQueuedActions();
-              }}
-              disabled={isSyncing}
-              className="rounded-lg p-2 hover:bg-white/5 disabled:opacity-50"
-              aria-label="Sync queued actions"
+              onClick={retryQueuedActions}
+              className="rounded-lg p-2 hover:bg-white/5"
+              aria-label="Retry queued actions"
             >
-              <RefreshCw className={`h-4 w-4 text-white ${isSyncing ? "animate-spin" : ""}`} />
+              <RefreshCw className="h-4 w-4 text-white" />
             </button>
 
             <button
@@ -65,14 +68,6 @@ export default function QueuedActions() {
           </div>
         )}
       </div>
-
-      {conflictCount > 0 && (
-        <p role="status" className="mt-3 text-xs font-semibold text-[#e8b84b]">
-          {conflictCount === 1
-            ? "A saved change was made on another device too - choose which one to keep."
-            : `${conflictCount} saved changes were made on another device too - choose which ones to keep.`}
-        </p>
-      )}
 
       {/* Queue Panel */}
       {isOpen && (
@@ -92,7 +87,9 @@ export default function QueuedActions() {
                 </div>
 
                 <div className="text-xs text-gray-400">
-                  Pending sync
+                  {conflictedActionIds.has(action.id)
+                    ? "Needs your decision before it can be saved"
+                    : "Pending sync"}
                 </div>
               </div>
             ))

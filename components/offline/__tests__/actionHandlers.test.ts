@@ -1,234 +1,405 @@
 import {
-  buildUpdatePayload,
-  detectUpdateConflict,
-  readQueuedUpdate,
-  replayQueuedUpdates,
-  resolveUpdateConflict,
+  detectConflicts,
+  parseQueuedUpdate,
+  replayQueuedActions,
+  resolveConflicts,
   valuesEqual,
-  type ReplayResult,
+  type ConflictPrompt,
+  type QueuedActionLike,
   type SyncAdapter,
   type VersionedRecord,
+  type VersionedUpdateType,
 } from "../actionHandlers";
 
-/** Builds a versioned record without tripping excess-property checks. */
-function record(shape: Record<string, unknown>): VersionedRecord {
-  return shape as unknown as VersionedRecord;
+function record(values: Record<string, unknown>): VersionedRecord {
+  return values as VersionedRecord;
 }
 
-describe("actionHandlers - versioned offline updates", () => {
-  it("captures the record snapshot and last-modified marker when queueing", () => {
-    const payload = buildUpdatePayload(
-      record({ id: "budget_1", name: "Groceries", amount: 500, updatedAt: "2026-01-01T00:00:00.000Z" }),
-      { amount: 600 },
-    );
+const BASE_TIME = Date.parse("2026-03-01T10:00:00.000Z");
 
-    expect(payload.id).toBe("budget_1");
-    expect(payload.baseVersion).toBe("2026-01-01T00:00:00.000Z");
-    expect(payload.base).toMatchObject({ name: "Groceries", amount: 500 });
-    expect(payload.changes).toEqual({ amount: 600 });
-    expect(payload.legacy).toBe(false);
+const baseBudget = {
+  id: "budget_1",
+  updatedAt: "2026-03-01T10:00:00.000Z",
+  name: "Groceries",
+  amount: 500,
+  category: "food",
+};
+
+const queuedAt = BASE_TIME + 60_000;
+
+describe("parseQueuedUpdate", () => {
+  it("reads the new payload shape with an explicit change set and base", () => {
+    const parsed = parseQueuedUpdate({
+      id: "budget_1",
+      changes: { amount: 650 },
+      base: baseBudget,
+      baseVersion: baseBudget.updatedAt,
+    });
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.id).toBe("budget_1");
+    expect(parsed?.changes).toEqual({ amount: 650 });
+    expect(parsed?.base).toEqual(baseBudget);
+    expect(parsed?.legacy).toBe(false);
   });
 
-  it("reads legacy payloads queued before versioning as a change set", () => {
-    const payload = readQueuedUpdate({ id: "budget_1", name: "Groceries", amount: 600 });
+  it("still reads payloads queued before versioning existed", () => {
+    const parsed = parseQueuedUpdate({
+      id: "budget_1",
+      name: "Groceries",
+      amount: 650,
+    });
 
-    expect(payload).not.toBeNull();
-    expect(payload?.legacy).toBe(true);
-    expect(payload?.base).toBeNull();
-    expect(payload?.changes).toEqual({ name: "Groceries", amount: 600 });
+    expect(parsed?.legacy).toBe(true);
+    expect(parsed?.changes).toEqual({ name: "Groceries", amount: 650 });
+    expect(parsed?.base).toBeNull();
   });
 
-  it("auto-merges edits to genuinely different fields", () => {
-    const payload = buildUpdatePayload(
-      record({ id: "budget_1", name: "Groceries", amount: 500 }),
-      { amount: 600 },
-    );
-    const current = record({ id: "budget_1", name: "Groceries plus", amount: 500 });
-
-    const detection = detectUpdateConflict(payload, current);
-
-    expect(detection.status).toBe("apply");
-    expect(detection.conflicts).toEqual([]);
-    expect(detection.merged.amount).toBe(600);
-    expect(detection.merged.name).toBe("Groceries plus");
-    expect(detection.autoMerged).toContain("amount");
-  });
-
-  it("raises a conflict when both devices changed the same field differently", () => {
-    const payload = buildUpdatePayload(
-      record({ id: "budget_1", name: "Groceries", amount: 500 }),
-      { amount: 600 },
-    );
-    const current = record({ id: "budget_1", name: "Groceries", amount: 750 });
-
-    const detection = detectUpdateConflict(payload, current);
-
-    expect(detection.status).toBe("conflict");
-    expect(detection.conflicts).toEqual([{ field: "amount", mine: 600, theirs: 750 }]);
-    // Nothing is overwritten while the conflict is unresolved.
-    expect(detection.merged.amount).toBe(750);
-  });
-
-  it("does not ask when both devices set a field to the same value", () => {
-    const payload = buildUpdatePayload(
-      record({ id: "budget_1", amount: 500 }),
-      { amount: 600 },
-    );
-    const current = record({ id: "budget_1", amount: 600 });
-
-    const detection = detectUpdateConflict(payload, current);
-
-    expect(detection.status).toBe("apply");
-    expect(detection.conflicts).toEqual([]);
-  });
-
-  it("keeps safe fields and applies the user's choice for conflicting ones", () => {
-    const payload = buildUpdatePayload(
-      record({ id: "budget_1", amount: 500, category: "fun" }),
-      { amount: 600, category: "food" },
-    );
-    const current = record({ id: "budget_1", amount: 750, category: "travel" });
-
-    const detection = detectUpdateConflict(payload, current);
-    expect(detection.conflicts.map((c) => c.field).sort()).toEqual(["amount", "category"]);
-
-    const chosen = resolveUpdateConflict(
-      detection,
-      { strategy: "choose_fields", choices: { amount: "mine", category: "theirs" } },
-      "2026-02-01T00:00:00.000Z",
-    );
-
-    expect(chosen.changed).toBe(true);
-    expect(chosen.record.amount).toBe(600);
-    expect(chosen.record.category).toBe("travel");
-    expect(chosen.record.updatedAt).toBe("2026-02-01T00:00:00.000Z");
-  });
-
-  it("supports keep-mine and keep-others for every conflicting field", () => {
-    const payload = buildUpdatePayload(
-      record({ id: "budget_1", amount: 500 }),
-      { amount: 600 },
-    );
-    const current = record({ id: "budget_1", amount: 750 });
-    const detection = detectUpdateConflict(payload, current);
-
-    const mine = resolveUpdateConflict(detection, { strategy: "keep_mine" }, "now");
-    expect(mine.record.amount).toBe(600);
-
-    const theirs = resolveUpdateConflict(detection, { strategy: "keep_theirs" }, "now");
-    expect(theirs.record.amount).toBe(750);
-    expect(theirs.changed).toBe(false);
-  });
-
-  it("falls back to the record timestamp for legacy payloads", () => {
-    const legacy = readQueuedUpdate({ id: "budget_1", amount: 600 });
-    expect(legacy).not.toBeNull();
-
-    const unchanged = detectUpdateConflict(
-      legacy as NonNullable<typeof legacy>,
-      record({ id: "budget_1", amount: 500, updatedAt: "2026-01-01T00:00:00.000Z" }),
-      1_800_000_000_000,
-    );
-    expect(unchanged.status).toBe("apply");
-
-    const changedElsewhere = detectUpdateConflict(
-      legacy as NonNullable<typeof legacy>,
-      record({ id: "budget_1", amount: 750, updatedAt: "2026-06-01T00:00:00.000Z" }),
-      1_700_000_000_000,
-    );
-    expect(changedElsewhere.status).toBe("conflict");
-    expect(changedElsewhere.conflicts[0].field).toBe("amount");
-  });
-
-  it("treats structurally equal values as unchanged", () => {
-    expect(valuesEqual({ a: 1 }, { a: 1 })).toBe(true);
-    expect(valuesEqual(new Date("2026-01-01"), new Date("2026-01-01"))).toBe(true);
-    expect(valuesEqual({ a: 1 }, { a: 2 })).toBe(false);
+  it("ignores payloads without a record id", () => {
+    expect(parseQueuedUpdate(null)).toBeNull();
+    expect(parseQueuedUpdate("nope")).toBeNull();
+    expect(parseQueuedUpdate({ amount: 10 })).toBeNull();
   });
 });
 
-describe("actionHandlers - replay", () => {
-  const currentBudgets: Record<string, Record<string, unknown>> = {
-    budget_merge: { id: "budget_merge", name: "Groceries", amount: 500 },
-    budget_clash: { id: "budget_clash", name: "Transport", amount: 100 },
-  };
+describe("valuesEqual", () => {
+  it("compares primitives, dates and structures", () => {
+    expect(valuesEqual(5, 5)).toBe(true);
+    expect(valuesEqual(5, "5")).toBe(false);
+    expect(valuesEqual(new Date(1000), new Date(1000))).toBe(true);
+    expect(valuesEqual({ a: 1 }, { a: 1 })).toBe(true);
+    expect(valuesEqual([1, 2], [2, 1])).toBe(false);
+  });
+});
 
-  function makeAdapter(): jest.Mocked<SyncAdapter> {
-    return {
-      supports: jest.fn((type: string) => type.startsWith("UPDATE_")),
-      loadCurrent: jest.fn(async (_type: string, id: string) => {
-        const found = currentBudgets[id];
-        return found ? record(found) : null;
-      }),
-      save: jest.fn(async () => undefined),
-    } as unknown as jest.Mocked<SyncAdapter>;
-  }
-
-  it("applies safe updates, prompts on conflicts and skips unknown actions", async () => {
-    const adapter = makeAdapter();
-    const actions = [
+describe("detectConflicts — two devices editing the same budget", () => {
+  it("asks the user when both devices changed the same field differently", () => {
+    const result = detectConflicts(
       {
-        id: "a1",
-        type: "UPDATE_BUDGET",
-        description: "Update budget: Groceries",
-        timestamp: 1,
-        data: buildUpdatePayload(record(currentBudgets.budget_merge), { amount: 600 }),
+        id: "budget_1",
+        changes: { amount: 650 },
+        base: baseBudget,
+        baseVersion: baseBudget.updatedAt,
+        legacy: false,
       },
-      {
-        id: "a2",
-        type: "UPDATE_BUDGET",
-        description: "Update budget: Transport",
-        timestamp: 2,
-        data: buildUpdatePayload(
-          record({ id: "budget_clash", name: "Transport", amount: 100 }),
-          { amount: 300 },
-        ),
-      },
-      {
-        id: "a3",
-        type: "CREATE_BUDGET",
-        description: "Create budget",
-        timestamp: 3,
-        data: { name: "New" },
-      },
-    ];
-
-    // Simulate the other device having changed budget_clash first.
-    currentBudgets.budget_clash = { id: "budget_clash", name: "Transport", amount: 250 };
-
-    const result: ReplayResult = await replayQueuedUpdates(actions, adapter);
-
-    expect(result.appliedIds).toEqual(["a1"]);
-    expect(result.skippedIds).toEqual(["a3"]);
-    expect(result.prompts).toHaveLength(1);
-    expect(result.prompts[0].recordId).toBe("budget_clash");
-    expect(result.prompts[0].detection.conflicts[0].field).toBe("amount");
-    expect(adapter.save).toHaveBeenCalledTimes(1);
-    expect(adapter.save).toHaveBeenCalledWith(
-      "UPDATE_BUDGET",
-      expect.objectContaining({ id: "budget_merge", amount: 600 }),
+      record({ ...baseBudget, amount: 800, updatedAt: "2026-03-01T11:00:00.000Z" }),
+      { queuedAt },
     );
+
+    expect(result.status).toBe("conflict");
+    expect(result.conflicts).toEqual([{ field: "amount", mine: 650, theirs: 800 }]);
+    expect(result.autoMergedFields).toEqual([]);
   });
 
-  it("reports a failure when the record no longer exists", async () => {
-    const adapter = makeAdapter();
-    adapter.loadCurrent.mockResolvedValueOnce(null);
+  it("applies edits to different fields without asking anything", () => {
+    const result = detectConflicts(
+      {
+        id: "budget_1",
+        changes: { amount: 650 },
+        base: baseBudget,
+        baseVersion: baseBudget.updatedAt,
+        legacy: false,
+      },
+      record({
+        ...baseBudget,
+        category: "household",
+        updatedAt: "2026-03-01T11:00:00.000Z",
+      }),
+      { queuedAt },
+    );
 
-    const result = await replayQueuedUpdates(
+    expect(result.status).toBe("apply");
+    expect(result.autoMergedFields).toEqual(["amount"]);
+    expect(result.record).toMatchObject({ amount: 650, category: "household" });
+  });
+
+  it("keeps the other device's value for fields this device never touched", () => {
+    const result = detectConflicts(
+      {
+        id: "budget_1",
+        changes: { name: "Groceries" },
+        base: baseBudget,
+        baseVersion: baseBudget.updatedAt,
+        legacy: false,
+      },
+      record({ ...baseBudget, amount: 900, updatedAt: "2026-03-01T11:00:00.000Z" }),
+      { queuedAt },
+    );
+
+    expect(result.status).toBe("apply");
+    expect(result.record.amount).toBe(900);
+  });
+
+  it("does not raise a conflict when both devices chose the same value", () => {
+    const result = detectConflicts(
+      {
+        id: "budget_1",
+        changes: { amount: 800 },
+        base: baseBudget,
+        baseVersion: baseBudget.updatedAt,
+        legacy: false,
+      },
+      record({ ...baseBudget, amount: 800, updatedAt: "2026-03-01T11:00:00.000Z" }),
+      { queuedAt },
+    );
+
+    expect(result.status).toBe("apply");
+    expect(result.autoMergedFields).toEqual([]);
+  });
+
+  it("falls back to the queue timestamp for payloads without a base snapshot", () => {
+    const changedElsewhere = detectConflicts(
+      { id: "budget_1", changes: { amount: 650 }, base: null, baseVersion: null, legacy: true },
+      record({ ...baseBudget, amount: 800, updatedAt: "2026-03-01T11:00:00.000Z" }),
+      { queuedAt },
+    );
+    expect(changedElsewhere.status).toBe("conflict");
+
+    const untouchedElsewhere = detectConflicts(
+      { id: "budget_1", changes: { amount: 650 }, base: null, baseVersion: null, legacy: true },
+      record({ ...baseBudget, updatedAt: "2026-03-01T09:00:00.000Z" }),
+      { queuedAt },
+    );
+    expect(untouchedElsewhere.status).toBe("apply");
+    expect(untouchedElsewhere.record.amount).toBe(650);
+  });
+});
+
+describe("resolveConflicts", () => {
+  const detection = detectConflicts(
+    {
+      id: "budget_1",
+      changes: { amount: 650, category: "household" },
+      base: baseBudget,
+      baseVersion: baseBudget.updatedAt,
+      legacy: false,
+    },
+    record({ ...baseBudget, amount: 800, updatedAt: "2026-03-01T11:00:00.000Z" }),
+    { queuedAt },
+  );
+
+  it("keeps the offline values when the user chooses them", () => {
+    const { record: resolved, shouldWrite } = resolveConflicts(
+      detection,
+      { strategy: "keep_mine" },
+      { updatedAt: "2026-03-01T12:00:00.000Z" },
+    );
+
+    expect(shouldWrite).toBe(true);
+    expect(resolved).toMatchObject({
+      amount: 650,
+      category: "household",
+      updatedAt: "2026-03-01T12:00:00.000Z",
+    });
+  });
+
+  it("keeps the other device's value for the contested field while still saving the auto-merged one", () => {
+    const { record: resolved, shouldWrite } = resolveConflicts(
+      detection,
+      { strategy: "keep_theirs" },
+      { updatedAt: "2026-03-01T12:00:00.000Z" },
+    );
+
+    expect(shouldWrite).toBe(true); // the non-conflicting category edit still lands
+    expect(resolved.amount).toBe(800);
+    expect(resolved.category).toBe("household");
+  });
+
+  it("writes nothing at all when there is nothing but the other device's values", () => {
+    const singleFieldDetection = detectConflicts(
+      {
+        id: "budget_1",
+        changes: { amount: 650 },
+        base: baseBudget,
+        baseVersion: baseBudget.updatedAt,
+        legacy: false,
+      },
+      record({ ...baseBudget, amount: 800, updatedAt: "2026-03-01T11:00:00.000Z" }),
+      { queuedAt },
+    );
+
+    const { record: resolved, shouldWrite } = resolveConflicts(
+      singleFieldDetection,
+      { strategy: "keep_theirs" },
+      { updatedAt: "2026-03-01T12:00:00.000Z" },
+    );
+
+    expect(shouldWrite).toBe(false);
+    expect(resolved.updatedAt).toBe("2026-03-01T11:00:00.000Z");
+    expect(resolved.amount).toBe(800);
+  });
+
+  it("honours per-field choices", () => {
+    const { record: resolved } = resolveConflicts(
+      detection,
+      { strategy: "choose_fields", choices: { amount: "mine", category: "theirs" } },
+      { updatedAt: "2026-03-01T12:00:00.000Z" },
+    );
+
+    expect(resolved.amount).toBe(650);
+    expect(resolved.category).toBe("food");
+  });
+});
+
+describe("replayQueuedActions", () => {
+  function createAdapter(records: VersionedRecord[]): SyncAdapter & {
+    applied: { type: VersionedUpdateType; record: VersionedRecord }[];
+  } {
+    const applied: { type: VersionedUpdateType; record: VersionedRecord }[] = [];
+    return {
+      applied,
+      supports: (type) => type !== "UPDATE_SPLIT_BILL",
+      fetchCurrent: async (_type, id) =>
+        records.find((candidate) => candidate.id === id) ?? null,
+      apply: async (type, recordToApply) => {
+        applied.push({ type, record: recordToApply });
+      },
+    };
+  }
+
+  function action(overrides: Partial<QueuedActionLike>): QueuedActionLike {
+    return {
+      id: "q1",
+      type: "UPDATE_BUDGET",
+      description: "Update budget: Groceries",
+      data: null,
+      timestamp: queuedAt,
+      ...overrides,
+    };
+  }
+
+  it("applies non-conflicting queued updates", async () => {
+    const adapter = createAdapter([
+      { ...baseBudget, category: "household", updatedAt: "2026-03-01T11:00:00.000Z" },
+    ]);
+
+    const outcome = await replayQueuedActions(
       [
-        {
-          id: "gone",
-          type: "UPDATE_BUDGET",
-          description: "Update deleted budget",
-          timestamp: 1,
-          data: buildUpdatePayload(record({ id: "missing", amount: 1 }), { amount: 2 }),
-        },
+        action({
+          data: {
+            id: "budget_1",
+            changes: { amount: 650 },
+            base: baseBudget,
+            baseVersion: baseBudget.updatedAt,
+          },
+        }),
       ],
       adapter,
     );
 
-    expect(result.appliedIds).toEqual([]);
-    expect(result.failures).toHaveLength(1);
-    expect(result.failures[0].actionId).toBe("gone");
+    expect(outcome.appliedIds).toEqual(["q1"]);
+    expect(outcome.conflictPrompts).toHaveLength(0);
+    expect(adapter.applied).toHaveLength(1);
+    expect(adapter.applied[0].record).toMatchObject({ amount: 650, category: "household" });
+  });
+
+  it("returns a prompt instead of overwriting when the same field was edited elsewhere", async () => {
+    const adapter = createAdapter([
+      { ...baseBudget, amount: 800, updatedAt: "2026-03-01T11:00:00.000Z" },
+    ]);
+
+    const outcome = await replayQueuedActions(
+      [
+        action({
+          data: {
+            id: "budget_1",
+            changes: { amount: 650 },
+            base: baseBudget,
+            baseVersion: baseBudget.updatedAt,
+          },
+        }),
+      ],
+      adapter,
+    );
+
+    expect(outcome.appliedIds).toEqual([]);
+    expect(adapter.applied).toHaveLength(0);
+    expect(outcome.conflictPrompts).toHaveLength(1);
+    expect(outcome.conflictPrompts[0].label).toBe("Groceries");
+    expect(outcome.conflictPrompts[0].detection.conflicts[0]).toEqual({
+      field: "amount",
+      mine: 650,
+      theirs: 800,
+    });
+  });
+
+  it("skips action types this build cannot replay yet", async () => {
+    const adapter = createAdapter([]);
+
+    const outcome = await replayQueuedActions(
+      [
+        action({ id: "pay", type: "SEND_PAYMENT", data: { amount: 10 } }),
+        action({
+          id: "split",
+          type: "UPDATE_SPLIT_BILL",
+          data: { id: "split_1", changes: { totalAmount: 20 } },
+        }),
+      ],
+      adapter,
+    );
+
+    expect(outcome.skippedIds).toEqual(["pay", "split"]);
+    expect(outcome.failures).toHaveLength(0);
+  });
+
+  it("reports a failure when the edited record no longer exists", async () => {
+    const outcome = await replayQueuedActions(
+      [
+        action({
+          data: {
+            id: "budget_missing",
+            changes: { amount: 1 },
+            base: baseBudget,
+            baseVersion: baseBudget.updatedAt,
+          },
+        }),
+      ],
+      createAdapter([]),
+    );
+
+    expect(outcome.failures).toHaveLength(1);
+    expect(outcome.failures[0].reason).toContain("no longer exists");
+  });
+
+  it("uses the same conflict logic for multi-actor shared budgets and split bills", async () => {
+    const prompts: ConflictPrompt[] = [];
+
+    for (const type of [
+      "UPDATE_SHARED_BUDGET",
+      "UPDATE_SPLIT_BILL",
+      "UPDATE_GOAL",
+    ] as VersionedUpdateType[]) {
+      const adapter = createAdapter([
+        { id: "record_1", updatedAt: "2026-03-01T11:00:00.000Z", amount: 200 },
+      ]);
+      // Force the type through the versioned path for this assertion.
+      adapter.supports = () => true;
+
+      const outcome = await replayQueuedActions(
+        [
+          action({
+            type,
+            id: `queued_${type}`,
+            data: {
+              id: "record_1",
+              changes: { amount: 100 },
+              base: { id: "record_1", amount: 50 },
+              baseVersion: "2026-03-01T10:00:00.000Z",
+            },
+          }),
+        ],
+        adapter,
+      );
+
+      expect(outcome.conflictPrompts).toHaveLength(1);
+      prompts.push(outcome.conflictPrompts[0]);
+    }
+
+    expect(prompts.map((prompt) => prompt.type)).toEqual([
+      "UPDATE_SHARED_BUDGET",
+      "UPDATE_SPLIT_BILL",
+      "UPDATE_GOAL",
+    ]);
+    expect(prompts[0].detection.conflicts[0].field).toBe("amount");
   });
 });

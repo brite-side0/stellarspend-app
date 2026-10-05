@@ -310,6 +310,7 @@ export function getMockGoalsFallback(): Goal[] {
       deadline: '2024-12-31',
       recurrence: 'once',
       createdAt: new Date(),
+      updatedAt: new Date().toISOString(),
     },
   ];
 }
@@ -326,36 +327,34 @@ export function setMockGoalsFallback(goals: Goal[]) {
 }
 
 /**
- * Last-modified marker for a savings goal (Issue #115).
- * Falls back to the creation time for goals saved before the marker existed.
- * @param goal - The goal to read the marker from.
- * @returns An ISO timestamp identifying the goal's current revision.
- */
-export function getGoalVersion(goal: Goal): string {
-  return goal.updatedAt ?? new Date(goal.createdAt).toISOString();
-}
-
-/**
- * Applies a partial update to a locally-stored savings goal and stamps its
- * last-modified marker, so a replaying offline edit can be compared against it.
+ * Applies an offline-resolved update to a goal in the local cache.
+ *
+ * Used by the offline sync layer (`components/offline/syncAdapter.ts`) when a
+ * queued goal edit is replayed after reconnecting. On-chain goal edits are not
+ * part of the deployed contract surface yet, so this updates the locally
+ * persisted copy that the UI reads from.
+ *
  * @param goalId - The ID of the goal to update.
- * @param changes - The goal fields to change.
- * @returns The updated goal, or null when no local goal has that ID.
+ * @param changes - The goal fields to merge into the stored goal.
+ * @returns The updated goal, or null when no goal with that id exists.
  */
 export function updateGoalLocal(
   goalId: string,
-  changes: Partial<Pick<Goal, 'name' | 'targetAmount' | 'deadline' | 'recurrence'>>,
+  changes: Partial<Pick<Goal, 'name' | 'targetAmount' | 'deadline' | 'recurrence'>>
 ): Goal | null {
-  const mockGoals = getMockGoalsFallback();
-  const index = mockGoals.findIndex((g) => g.id === goalId);
-  if (index === -1) return null;
-  mockGoals[index] = {
-    ...mockGoals[index],
+  const goals = getMockGoalsFallback();
+  const index = goals.findIndex((g) => g.id === goalId);
+  if (index === -1) {
+    return null;
+  }
+
+  goals[index] = {
+    ...goals[index],
     ...changes,
     updatedAt: new Date().toISOString(),
   };
-  setMockGoalsFallback(mockGoals);
-  return mockGoals[index];
+  setMockGoalsFallback(goals);
+  return goals[index];
 }
 
 /**
@@ -377,7 +376,6 @@ export async function fetchGoals(publicKey: string): Promise<Goal[]> {
       deadline: string;
       recurrence: string;
       created_at: string | number;
-      updated_at?: string | number;
     }>>(publicKey, SAVINGS_CONTRACT_ID, 'get_goals', [publicKey]);
 
     return raw.map((g) => ({
@@ -388,7 +386,6 @@ export async function fetchGoals(publicKey: string): Promise<Goal[]> {
       deadline: g.deadline,
       recurrence: (g.recurrence as 'once' | 'monthly' | 'yearly') || 'once',
       createdAt: new Date(g.created_at),
-      updatedAt: g.updated_at ? new Date(g.updated_at).toISOString() : undefined,
     }));
   } catch (e) {
     console.error('Failed to fetch goals on-chain. Falling back to local storage.', e);

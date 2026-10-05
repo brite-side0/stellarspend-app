@@ -13,84 +13,82 @@ import {
   getMockGoalsFallback,
   updateGoalLocal,
 } from "@/lib/stellar/savingsGoalContract";
-import { fetchSplitsForUser, updateSplitLocal } from "@/lib/stellar/escrowContract";
 import type { Goal } from "@/lib/types/savings";
-import type { SplitBill } from "@/lib/types/splits";
 
-import {
-  isVersionedUpdateType,
-  type SyncAdapter,
-  type VersionedRecord,
+import type {
+  SyncAdapter,
+  VersionedRecord,
+  VersionedUpdateType,
 } from "./actionHandlers";
 
 /**
- * Concrete read/write wiring for the offline conflict detector.
+ * Concretely reads and writes the records the offline queue replays.
  *
- * `actionHandlers.ts` knows the merge rules but nothing about contracts or
- * wallets; this adapter is the other half. It registers every record type the
- * offline queue can replay — plain budgets/goals, and the multi-actor shared
- * budget (#11) and split bill (#10) records — so all of them run through the
- * exact same detection code.
+ * Kept separate from `actionHandlers.ts` so the conflict logic stays free of
+ * contract/wallet dependencies and can be unit tested in isolation.
  */
 
-/** Strips the fields that are never part of an update from a merged record. */
-function writableFields(record: Record<string, unknown>): Record<string, unknown> {
-  const fields: Record<string, unknown> = { ...record };
+function writableFields(record: VersionedRecord): Record<string, unknown> {
+  const fields: Record<string, unknown> = {
+    ...(record as unknown as Record<string, unknown>),
+  };
   delete fields.id;
   delete fields.updatedAt;
   delete fields.createdAt;
   return fields;
 }
 
-async function loadRecords(type: string): Promise<VersionedRecord[]> {
+async function fetchRecords(
+  type: VersionedUpdateType,
+): Promise<VersionedRecord[]> {
   switch (type) {
     case "UPDATE_BUDGET":
       return fetchBudgets();
 
     case "UPDATE_GOAL": {
       const publicKey = getConnectedPublicKey();
-      return publicKey ? fetchGoals(publicKey) : getMockGoalsFallback();
+      if (publicKey) {
+        return fetchGoals(publicKey);
+      }
+      return getMockGoalsFallback();
     }
 
     case "UPDATE_SHARED_BUDGET":
       return fetchSharedBudgets();
-
-    case "UPDATE_SPLIT_BILL": {
-      const publicKey = getConnectedPublicKey();
-      return publicKey ? fetchSplitsForUser(publicKey) : [];
-    }
 
     default:
       return [];
   }
 }
 
-async function saveRecord(
-  type: string,
-  record: Record<string, unknown>,
+async function applyRecord(
+  type: VersionedUpdateType,
+  record: VersionedRecord,
 ): Promise<void> {
-  const id = String(record.id);
   const fields = writableFields(record);
 
   switch (type) {
     case "UPDATE_BUDGET":
-      await updateBudget(id, fields as Partial<Omit<Budget, "id" | "createdAt">>);
+      await updateBudget(
+        record.id,
+        fields as Partial<Omit<Budget, "id" | "createdAt">>,
+      );
       return;
 
-    case "UPDATE_GOAL": {
-      const updated = updateGoalLocal(
-        id,
-        fields as Partial<Pick<Goal, "name" | "targetAmount" | "deadline" | "recurrence">>,
+    case "UPDATE_GOAL":
+      updateGoalLocal(
+        record.id,
+        fields as Partial<
+          Pick<Goal, "name" | "targetAmount" | "deadline" | "recurrence">
+        >,
       );
-      if (!updated) throw new Error(`Savings goal ${id} no longer exists.`);
       return;
-    }
 
     case "UPDATE_SHARED_BUDGET":
-      // Co-owned budgets can't be written directly: the offline edit is
-      // proposed for the other members to approve, keeping the approval flow.
+      // Co-owned budgets go through the approval flow, so replaying an offline
+      // edit proposes the change for the other members instead of writing it.
       await proposeBudgetChange(
-        id,
+        record.id,
         fields as Partial<
           Pick<
             SharedBudget,
@@ -101,14 +99,8 @@ async function saveRecord(
       );
       return;
 
-    case "UPDATE_SPLIT_BILL": {
-      const updated = updateSplitLocal(id, fields as Partial<SplitBill>);
-      if (!updated) throw new Error(`Split bill ${id} no longer exists.`);
-      return;
-    }
-
     default:
-      throw new Error(`Applying ${type} is not supported.`);
+      throw new Error(`Applying ${type} is not supported yet.`);
   }
 }
 
@@ -116,16 +108,17 @@ async function saveRecord(
 export function createSyncAdapter(): SyncAdapter {
   return {
     supports(type) {
-      return isVersionedUpdateType(type);
+      // Split bills are not persisted yet (see lib/types/splits.ts), so their
+      // queued actions stay in the queue rather than being reported as failed.
+      return type !== "UPDATE_SPLIT_BILL";
     },
-
-    async loadCurrent(type, id) {
-      const records = await loadRecords(type);
-      return records.find((record) => record.id === id) ?? null;
+    fetchCurrent(type, id) {
+      return fetchRecords(type).then(
+        (records) => records.find((record) => record.id === id) ?? null,
+      );
     },
-
-    save(type, record) {
-      return saveRecord(type, record);
+    apply(type, record) {
+      return applyRecord(type, record);
     },
   };
 }
