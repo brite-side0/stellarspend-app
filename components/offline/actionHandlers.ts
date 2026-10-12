@@ -97,7 +97,7 @@ function writeField(
   field: string,
   value: unknown,
 ): VersionedRecord {
-  return { ...(record as unknown as Record<string, unknown>), [field]: value } as VersionedRecord;
+  return { ...(record as unknown as Record<string, unknown>), [field]: value } as unknown as VersionedRecord;
 }
 
 /**
@@ -264,6 +264,8 @@ export function resolveConflicts(
   let record = detection.record;
   let shouldWrite = detection.autoMergedFields.length > 0;
 
+  const conflictFields = new Set(detection.conflicts.map((conflict) => conflict.field));
+
   for (const conflict of detection.conflicts) {
     const choice =
       resolution.strategy === "keep_mine"
@@ -277,6 +279,16 @@ export function resolveConflicts(
       shouldWrite = true;
     } else {
       record = writeField(record, conflict.field, conflict.theirs);
+    }
+  }
+
+  // Per-field decisions also cover fields only this device touched (auto-merged):
+  // choosing "theirs" there restores the value already persisted by the other device.
+  if (resolution.strategy === "choose_fields" && resolution.choices) {
+    for (const [field, choice] of Object.entries(resolution.choices)) {
+      if (conflictFields.has(field) || choice !== "theirs") continue;
+      record = writeField(record, field, readField(detection.current, field));
+      shouldWrite = true;
     }
   }
 

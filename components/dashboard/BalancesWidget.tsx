@@ -69,6 +69,7 @@ function AssetCard({ asset, index }: { asset: AssetBalance; index: number }) {
           {cfg.symbol}
         </div>
         <span
+          aria-label={`24h change: ${isUp ? "+" : ""}${asset.change24h.toFixed(2)}%`}
           className={`flex items-center gap-1 text-xs font-bold ${isUp ? "text-[#4ade80]" : "text-red-400"}`}
         >
           {isUp ? (
@@ -104,6 +105,8 @@ function SkeletonCard() {
   return (
     <div
       data-testid="balance-skeleton"
+      role="status"
+      aria-label="Loading balance"
       className="flex flex-col gap-4 p-5 rounded-2xl border border-white/10 bg-white/[0.025] animate-pulse"
     >
       {/* Header row - matches AssetCard header */}

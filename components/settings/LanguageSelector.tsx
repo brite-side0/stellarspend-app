@@ -55,6 +55,7 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({
             <motion.button
               key={lang.code}
               onClick={() => handleLanguageChange(lang.code)}
+              aria-current={language === lang.code ? "true" : undefined}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               lang={lang.code}

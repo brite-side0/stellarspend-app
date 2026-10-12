@@ -88,7 +88,6 @@ export function getPaymentAsset(
  * @throws {Error} If the source or destination key is invalid, the amount, sequence or fee is invalid, the memo exceeds 28 bytes, or the asset issuer is not configured.
  */
 export function buildPaymentTransaction({
-export function buildPaymentTransaction({
   source,
   destination,
   amount,
