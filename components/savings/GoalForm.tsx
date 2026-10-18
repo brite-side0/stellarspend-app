@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
+import { motion, useReducedMotion } from "framer-motion";
 import { z } from "zod";
 import { useForm } from "@/hooks/useForm";
 import { useOffline } from "@/components/offline/OfflineProvider";
@@ -56,6 +57,9 @@ export default function GoalForm({
   const { toast } = useToast();
   const publicKey = freighter.publicKey;
   const [txStatus, setTxStatus] = useState<string | null>(null);
+  const [showCelebration, setShowCelebration] = useState(false);
+  const hasCelebratedRef = useRef(false);
+  const shouldReduceMotion = useReducedMotion();
 
   const {
     register,
@@ -76,6 +80,19 @@ export default function GoalForm({
   });
 
   const recurrence = watch("recurrence");
+  const targetAmount = watch("targetAmount");
+
+  const triggerCelebration = () => {
+    if (hasCelebratedRef.current) return;
+    hasCelebratedRef.current = true;
+    setShowCelebration(true);
+  };
+
+  const handleReset = () => {
+    reset();
+    hasCelebratedRef.current = false;
+    setShowCelebration(false);
+  };
 
   const onSubmit = async (data: GoalFormData) => {
     if (!isOnline) {
@@ -85,7 +102,7 @@ export default function GoalForm({
         description:
           "Offline: Your goal has been queued and will be saved when you reconnect.",
       });
-      reset();
+      handleReset();
       onOpenChange(false);
       return;
     }
@@ -183,7 +200,10 @@ export default function GoalForm({
         description: `Your savings goal "${data.title}" has been created.`,
       });
       onGoalCreated(newGoal);
-      reset();
+      if (Number(targetAmount) > 0) {
+        triggerCelebration();
+      }
+      handleReset();
       onOpenChange(false);
     } catch (error: unknown) {
       console.error(error);
@@ -207,6 +227,19 @@ export default function GoalForm({
         onClick={() => onOpenChange(false)}
       ></div>
       <div className="relative w-full max-w-md p-6 bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-100 dark:border-gray-700">
+        {showCelebration && (
+          <motion.div
+            role="status"
+            aria-live="polite"
+            initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.8 }}
+            animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1 }}
+            transition={{ duration: shouldReduceMotion ? 0.15 : 0.4, ease: "easeOut" }}
+            className="absolute -top-4 left-1/2 -translate-x-1/2 z-10 px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-full shadow-lg flex items-center gap-2"
+          >
+            <span aria-hidden="true">🎉</span>
+            Goal complete!
+          </motion.div>
+        )}
         <div className="flex items-center space-x-2 mb-6">
           <div className="p-2 bg-green-100 dark:bg-green-900 rounded-lg">
             <svg
